@@ -1,37 +1,11 @@
-// functions/oauth-start (T034) — POST { cadre_id, platform } → { authorize_url, state }.
-// Persists a short-lived oauth_state row; the client redirects the cadre to the platform's
-// consent screen. Only Creator/Business IG + YouTube are supported (FR-001).
+// functions/oauth-start (T034) — begin cadre consent via Nango. POST { cadre_id, platform } →
+// { connect_session_token, connect_link, provider_config_key }. The SPA hands the session token to
+// the Nango frontend SDK, which renders the consent UI and runs the OAuth dance (against the mock
+// locally, real Meta/Google in prod). Only Creator/Business IG + YouTube are supported (FR-001);
+// the unsupported-account check happens at oauth-callback once we can read the account.
 
-import { serviceClient } from "../../shared/db.ts";
-import { ENDPOINTS } from "../../shared/endpoints.ts";
+import { createConnectSession } from "../../shared/nango.ts";
 import { errorResponse, jsonResponse, preflight } from "../../shared/log.ts";
-
-const FUNCTIONS_BASE = Deno.env.get("FUNCTIONS_BASE_URL") ?? "";
-const REDIRECT = `${FUNCTIONS_BASE}/oauth-callback`;
-
-function authorizeUrl(platform: string, state: string): string {
-  if (platform === "instagram") {
-    const p = new URLSearchParams({
-      client_id: Deno.env.get("IG_APP_ID") ?? "",
-      redirect_uri: REDIRECT,
-      state,
-      response_type: "code",
-      scope: "instagram_basic,instagram_manage_comments,pages_show_list,business_management",
-    });
-    return `${ENDPOINTS.facebookDialog}?${p}`;
-  }
-  // youtube
-  const p = new URLSearchParams({
-    client_id: Deno.env.get("YT_CLIENT_ID") ?? "",
-    redirect_uri: REDIRECT,
-    response_type: "code",
-    access_type: "offline",
-    prompt: "consent",
-    state,
-    scope: "https://www.googleapis.com/auth/youtube.readonly",
-  });
-  return `${ENDPOINTS.googleAuthDialog}?${p}`;
-}
 
 Deno.serve(async (req) => {
   const pf = preflight(req);
@@ -41,11 +15,17 @@ Deno.serve(async (req) => {
   if (!["instagram", "youtube"].includes(platform)) {
     return errorResponse(400, "unsupported_platform", "platform must be instagram or youtube");
   }
+  if (!cadre_id) return errorResponse(400, "missing_cadre", "cadre_id required");
 
-  const state = crypto.randomUUID();
-  const db = serviceClient();
-  const { error } = await db.from("oauth_state").insert({ state, cadre_id, platform });
-  if (error) return errorResponse(400, "state_error", error.message);
-
-  return jsonResponse({ authorize_url: authorizeUrl(platform, state), state });
+  try {
+    // provider_config_key matches the Nango integration unique_key (instagram / youtube).
+    const session = await createConnectSession(`cadre:${cadre_id}`, platform);
+    return jsonResponse({
+      connect_session_token: session.token,
+      connect_link: session.connect_link,
+      provider_config_key: platform,
+    });
+  } catch (e) {
+    return errorResponse(502, "nango_error", String(e));
+  }
 });

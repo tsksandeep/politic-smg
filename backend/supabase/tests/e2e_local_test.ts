@@ -95,22 +95,62 @@ async function hmacSha256Hex(secret: string, raw: string): Promise<string> {
     ["sign"],
   );
   const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(raw));
-  return "sha256=" + Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  return "sha256=" +
+    Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function onboard(cadreId: string, platform: "instagram" | "youtube", code: string) {
+const NANGO_HOST = Deno.env.get("NANGO_HOST") ?? "http://localhost:3003";
+
+async function nangoSecretKey(): Promise<string> {
+  const rows = await pg("GET", "app_config?key=eq.nango_secret_key&select=value");
+  if (!rows?.[0]?.value) throw new Error("nango_secret_key not found in app_config");
+  return rows[0].value as string;
+}
+
+// Simulate a cadre completing the Nango Connect UI by importing a connection with mock credentials
+// (POST /connections) — Nango then owns the token (the mock APIs ignore its value).
+async function importNangoConnection(connectionId: string, providerConfigKey: string, sk: string) {
+  const res = await fetch(`${NANGO_HOST}/connections`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${sk}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      connection_id: connectionId,
+      provider_config_key: providerConfigKey,
+      credentials: {
+        type: "OAUTH2",
+        access_token: `mock-access-${connectionId}`,
+        refresh_token: "mock-refresh",
+        expires_at: "2030-01-01T00:00:00Z",
+      },
+    }),
+  });
+  if (res.status !== 201 && res.status !== 200) {
+    throw new Error(`nango import ${res.status}: ${await res.text()}`);
+  }
+}
+
+// Onboard via Nango: exercise oauth-start (connect session) → import a connection → record it
+// (oauth-callback), which resolves the platform account id (mock) and kicks off backfill.
+async function onboard(cadreId: string, platform: "instagram" | "youtube") {
+  const sk = await nangoSecretKey();
+  const connectionId = `conn-${cadreId.slice(0, 8)}-${platform}`;
+
   const start = await fn("oauth-start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ cadre_id: cadreId, platform }),
   });
   assertEquals(start.status, 200, `oauth-start(${platform}): ${start.raw}`);
-  const state = start.body.state as string;
-  const cb = await fetch(`${FUNCTIONS_URL}/oauth-callback?code=${code}&state=${encodeURIComponent(state)}`, {
-    redirect: "manual",
+  assert(start.body.connect_session_token, `oauth-start(${platform}) returns a connect token`);
+
+  await importNangoConnection(connectionId, platform, sk);
+
+  const cb = await fn("oauth-callback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cadre_id: cadreId, platform, connection_id: connectionId }),
   });
-  await cb.body?.cancel();
-  assert(cb.status >= 200 && cb.status < 400, `oauth-callback(${platform}) status ${cb.status}`);
+  assertEquals(cb.status, 200, `oauth-callback(${platform}): ${cb.raw}`);
 }
 
 Deno.test({
@@ -120,57 +160,113 @@ Deno.test({
   sanitizeResources: false,
   fn: async (t) => {
     const jwt = await adminJwt();
-    const [cadre] = await pg("POST", "cadre", { display_name: "e2e-cadre" }, "return=representation");
+    const [cadre] = await pg(
+      "POST",
+      "cadre",
+      { display_name: "e2e-cadre" },
+      "return=representation",
+    );
     const cadreId = cadre.id as string;
     let alertId = "";
 
     try {
       await t.step("US2: Instagram consent → connected account", async () => {
-        await onboard(cadreId, "instagram", "mock_ig_code");
-        const acc = await pg("GET", `connected_account?cadre_id=eq.${cadreId}&platform=eq.instagram&select=id,consent_status`);
+        await onboard(cadreId, "instagram");
+        const acc = await pg(
+          "GET",
+          `connected_account?cadre_id=eq.${cadreId}&platform=eq.instagram&select=id,consent_status`,
+        );
         assertEquals(acc.length, 1);
         assertEquals(acc[0].consent_status, "connected");
       });
 
-      const igAccount = (await pg("GET", `connected_account?cadre_id=eq.${cadreId}&platform=eq.instagram&select=id`))[0].id;
+      const igAccount = (await pg(
+        "GET",
+        `connected_account?cadre_id=eq.${cadreId}&platform=eq.instagram&select=id`,
+      ))[0].id;
 
       await t.step("US2: backfill ingests last-30-day posts + comments", async () => {
-        const bf = await fn("backfill", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ account_id: igAccount }) });
+        const bf = await fn("backfill", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ account_id: igAccount }),
+        });
         assertEquals(bf.status, 200, bf.raw);
         assert((bf.body.comments as number) >= 25, `ingested ${bf.body.comments} comments`);
       });
 
       await t.step("US1: analyze classifies + embeds (real LLM if configured)", async () => {
-        const an = await fn("analyze-comments", { method: "POST" });
-        assertEquals(an.status, 200, an.raw);
-        assert((an.body.processed as number) >= 25, `analyzed ${an.body.processed}`);
+        // Assert the END STATE (comments embedded), not a single call's count: the every-minute
+        // analyze-comments cron may drain part of the queue first, so the explicit call's `processed`
+        // is racy. Drive it ourselves a few times and confirm the backfilled comments get embedded.
+        let embedded = 0;
+        for (let i = 0; i < 5; i++) {
+          const an = await fn("analyze-comments", { method: "POST" });
+          assertEquals(an.status, 200, an.raw);
+          const rows = await pg(
+            "GET",
+            `comment?select=id,post!inner(connected_account_id)&post.connected_account_id=eq.${igAccount}&embedding=not.is.null`,
+          );
+          embedded = rows.length;
+          if (embedded >= 25) break;
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        assert(embedded >= 25, `embedded ${embedded} comments for the account`);
       });
 
       await t.step("US1: detect raises a live, summarized alert", async () => {
         const det = await fn("detect-narratives", { method: "POST" });
         assertEquals(det.status, 200, det.raw);
-        const board = await pg("GET", "alert_board?status=eq.open&select=id,volume,confidence,coordination_score,theme_summary&order=volume.desc");
+        const board = await pg(
+          "GET",
+          "alert_board?status=eq.open&select=id,volume,confidence,coordination_score,theme_summary&order=volume.desc",
+        );
         assert(board.length >= 1, "an open alert exists");
-        assert(board[0].volume >= 25 && board[0].confidence > 0 && board[0].coordination_score > 0, `metrics ${JSON.stringify(board[0])}`);
+        assert(
+          board[0].volume >= 25 && board[0].confidence > 0 && board[0].coordination_score > 0,
+          `metrics ${JSON.stringify(board[0])}`,
+        );
         assert(board[0].theme_summary, "alert has a theme summary");
         alertId = board[0].id;
-        console.log(`[e2e] alert vol=${board[0].volume} conf=${board[0].confidence} theme="${board[0].theme_summary}"`);
+        console.log(
+          `[e2e] alert vol=${board[0].volume} conf=${board[0].confidence} theme="${
+            board[0].theme_summary
+          }"`,
+        );
       });
 
-      await t.step("US1: alert-detail returns anonymized examples + honest signals (RLS via admin JWT)", async () => {
-        const d = await fn(`alert-detail?id=${alertId}`, {}, jwt);
-        assertEquals(d.status, 200, d.raw);
-        assert(d.body.confidence_signal && d.body.coordination_signal, "signals present");
-        const examples = d.body.example_comments as Array<Record<string, unknown>>;
-        assert(examples.length > 0, "example comments present");
-        assert(!("commenter_hash" in examples[0]) && !("from" in examples[0]), "no commenter identity leaked");
-      });
+      await t.step(
+        "US1: alert-detail returns anonymized examples + honest signals (RLS via admin JWT)",
+        async () => {
+          const d = await fn(`alert-detail?id=${alertId}`, {}, jwt);
+          assertEquals(d.status, 200, d.raw);
+          assert(d.body.confidence_signal && d.body.coordination_signal, "signals present");
+          const examples = d.body.example_comments as Array<Record<string, unknown>>;
+          assert(examples.length > 0, "example comments present");
+          assert(
+            !("commenter_hash" in examples[0]) && !("from" in examples[0]),
+            "no commenter identity leaked",
+          );
+        },
+      );
 
       await t.step("US3: triage acknowledge → close records response latency", async () => {
-        const ack = await fn("alert-triage", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: alertId, status: "acknowledged" }) }, jwt);
+        const ack = await fn("alert-triage", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: alertId, status: "acknowledged" }),
+        }, jwt);
         assertEquals(ack.status, 200, ack.raw);
         assertEquals(ack.body.status, "acknowledged");
-        const close = await fn("alert-triage", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: alertId, status: "closed", response_note: "counter-message issued" }) }, jwt);
+        const close = await fn("alert-triage", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: alertId,
+            status: "closed",
+            response_note: "counter-message issued",
+          }),
+        }, jwt);
         assertEquals(close.status, 200, close.raw);
         const [row] = await pg("GET", `alert?id=eq.${alertId}&select=status,response_latency`);
         assertEquals(row.status, "closed");
@@ -180,7 +276,16 @@ Deno.test({
       await t.step("FR-005/FR-016: detection-settings admin read + tune", async () => {
         const get = await fn("detection-settings", { method: "GET" }, jwt);
         assertEquals(get.status, 200, get.raw);
-        const put = await fn("detection-settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ min_volume: 20, min_growth_rate: 2.0, coordination_window: "00:20:00", coordination_min_accounts: 8 }) }, jwt);
+        const put = await fn("detection-settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            min_volume: 20,
+            min_growth_rate: 2.0,
+            coordination_window: "00:20:00",
+            coordination_min_accounts: 8,
+          }),
+        }, jwt);
         assertEquals(put.status, 200, put.raw);
         assertEquals(put.body.min_volume, 20);
       });
@@ -193,20 +298,48 @@ Deno.test({
       });
 
       await t.step("Ingestion: ig-webhook accepts a signed comment event", async () => {
-        const payload = JSON.stringify({ entry: [{ id: "ig_biz_mock_1", changes: [{ field: "comments", value: { media: { id: "ig_post_webhook_1" }, text: "Corrupt liars, resign now", from: { id: "wh_user_1", username: "wh_user_1" }, created_time: Math.floor(Date.now() / 1000) } }] }] });
+        const payload = JSON.stringify({
+          entry: [{
+            id: "ig_biz_mock_1",
+            changes: [{
+              field: "comments",
+              value: {
+                media: { id: "ig_post_webhook_1" },
+                text: "Corrupt liars, resign now",
+                from: { id: "wh_user_1", username: "wh_user_1" },
+                created_time: Math.floor(Date.now() / 1000),
+              },
+            }],
+          }],
+        });
         const sig = await hmacSha256Hex(IG_APP_SECRET, payload);
-        const wh = await fn("ig-webhook", { method: "POST", headers: { "Content-Type": "application/json", "x-hub-signature-256": sig }, body: payload });
+        const wh = await fn("ig-webhook", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-hub-signature-256": sig },
+          body: payload,
+        });
         assertEquals(wh.status, 200, wh.raw);
         assert((wh.body.accepted as number) >= 1, `webhook accepted ${wh.body.accepted}`);
         // A bad signature must be rejected.
-        const bad = await fn("ig-webhook", { method: "POST", headers: { "Content-Type": "application/json", "x-hub-signature-256": "sha256=deadbeef" }, body: payload });
+        const bad = await fn("ig-webhook", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-hub-signature-256": "sha256=deadbeef" },
+          body: payload,
+        });
         assertEquals(bad.status, 401, "bad signature rejected");
       });
 
       await t.step("US2: YouTube consent → backfill", async () => {
-        await onboard(cadreId, "youtube", "mock_yt_code");
-        const yt = (await pg("GET", `connected_account?cadre_id=eq.${cadreId}&platform=eq.youtube&select=id`))[0];
-        const bf = await fn("backfill", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ account_id: yt.id }) });
+        await onboard(cadreId, "youtube");
+        const yt = (await pg(
+          "GET",
+          `connected_account?cadre_id=eq.${cadreId}&platform=eq.youtube&select=id`,
+        ))[0];
+        const bf = await fn("backfill", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ account_id: yt.id }),
+        });
         assertEquals(bf.status, 200, bf.raw);
         assert((bf.body.comments as number) >= 25, `YT ingested ${bf.body.comments} comments`);
       });
@@ -217,17 +350,22 @@ Deno.test({
         assertEquals(ig.body.disabled, true, "YouTube polling gated off by default");
       });
 
-      await t.step("Lifecycle: token-refresh renews expiring IG tokens", async () => {
-        await pg("PATCH", `connected_account?id=eq.${igAccount}`, { token_expires_at: new Date(Date.now() + 86400_000).toISOString() }, "return=minimal");
-        const tr = await fn("token-refresh", { method: "POST" });
-        assertEquals(tr.status, 200, tr.raw);
-        assert((tr.body.refreshed as number) >= 1, `refreshed ${tr.body.refreshed}`);
-        const [row] = await pg("GET", `connected_account?id=eq.${igAccount}&select=token_expires_at`);
-        assert(new Date(row.token_expires_at).getTime() > Date.now() + 50 * 86400_000, "expiry pushed ~60 days out");
+      await t.step("Lifecycle: token storage + refresh is delegated to Nango", async () => {
+        // No token-refresh cron anymore — Nango owns token storage + auto-refresh. Sanity-check the
+        // account carries a Nango connection handle (and never a stored token).
+        const [row] = await pg(
+          "GET",
+          `connected_account?id=eq.${igAccount}&select=nango_connection_id`,
+        );
+        assert(row.nango_connection_id, "account references a Nango connection");
       });
 
       await t.step("FR-010: account-revoke stops ingestion + recomputes", async () => {
-        const rv = await fn("account-revoke", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ account_id: igAccount }) }, jwt);
+        const rv = await fn("account-revoke", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ account_id: igAccount }),
+        }, jwt);
         assertEquals(rv.status, 200, rv.raw);
         const [row] = await pg("GET", `connected_account?id=eq.${igAccount}&select=consent_status`);
         assertEquals(row.consent_status, "revoked");

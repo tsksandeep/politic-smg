@@ -1,0 +1,32 @@
+# Local-dev provider overrides for self-hosted Nango — mounted over the baked-in providers.yaml.
+# This is the ONLY thing that differs from prod: the OAuth URLs point at our mock (mocks/server.ts)
+# instead of real Meta/Google, so onboarding runs fully offline. In production this file is NOT
+# mounted, so Nango uses its built-in providers with the real URLs (only the URLs change).
+#
+# authorization_url is hit by the BROWSER (host) → localhost:9100.
+# token_url / proxy.base_url are hit by the Nango SERVER (container) → host.docker.internal:9100.
+
+instagram:
+  display_name: Instagram (local mock)
+  auth_mode: OAUTH2
+  scope_separator: ","
+  authorization_url: http://localhost:9100/meta/dialog/oauth
+  token_url: http://host.docker.internal:9100/meta/graph/oauth/access_token
+  proxy:
+    base_url: http://host.docker.internal:9100/meta/graph
+
+google:
+  display_name: Google (local mock)
+  auth_mode: OAUTH2
+  authorization_url: http://localhost:9100/google/auth
+  token_url: http://host.docker.internal:9100/google/token
+  authorization_params:
+    response_type: code
+    access_type: offline
+  proxy:
+    base_url: http://host.docker.internal:9100
+
+# YouTube reuses Google's OAuth config (same as upstream Nango).
+youtube:
+  alias: google
+  display_name: YouTube (local mock)

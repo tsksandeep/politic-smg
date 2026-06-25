@@ -5,6 +5,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { serviceClient } from "../../shared/db.ts";
+import { deleteConnection } from "../../shared/nango.ts";
 import { errorResponse, jsonResponse, preflight } from "../../shared/log.ts";
 
 async function callerRole(req: Request): Promise<string | null> {
@@ -31,11 +32,23 @@ Deno.serve(async (req) => {
   const { account_id } = await req.json();
   const db = serviceClient();
 
+  // Grab the Nango handle before flipping status, so we can revoke at Nango too.
+  const { data: acct } = await db
+    .from("connected_account")
+    .select("nango_connection_id, provider_config_key, platform")
+    .eq("id", account_id)
+    .maybeSingle();
+
   const { error } = await db
     .from("connected_account")
     .update({ consent_status: "revoked", revoked_at: new Date().toISOString() })
     .eq("id", account_id);
   if (error) return errorResponse(400, "revoke_failed", error.message);
+
+  // Best-effort: drop the connection (and its stored token) at Nango.
+  if (acct?.nango_connection_id) {
+    await deleteConnection(acct.nango_connection_id, acct.provider_config_key ?? acct.platform);
+  }
 
   // Immediate exclusion from active detection; physical purge runs on schedule.
   await db.rpc("recompute_after_revoke");

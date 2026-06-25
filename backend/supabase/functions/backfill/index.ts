@@ -6,7 +6,7 @@ import { serviceClient } from "../../shared/db.ts";
 import { ENDPOINTS } from "../../shared/endpoints.ts";
 import { hashCommenter } from "../../shared/hash.ts";
 import { errorResponse, jsonResponse, logger } from "../../shared/log.ts";
-import { youtubeAccessToken } from "../../shared/youtube.ts";
+import { getAccessToken } from "../../shared/nango.ts";
 
 const log = logger("backfill");
 const SINCE_DAYS = 30;
@@ -18,29 +18,26 @@ Deno.serve(async (req) => {
 
   const { data: acct } = await db
     .from("connected_account")
-    .select("id, platform, external_id, consent_status")
+    .select("id, platform, external_id, consent_status, nango_connection_id, provider_config_key")
     .eq("id", account_id)
     .maybeSingle();
   if (!acct || acct.consent_status !== "connected") {
     return errorResponse(404, "not_connected", "account not found or not connected");
   }
+  if (!acct.nango_connection_id) {
+    return errorResponse(400, "no_connection", "account has no Nango connection");
+  }
 
-  const { data: storedToken } = await db.rpc("read_account_token", { p_account: account_id });
-  if (!storedToken) return errorResponse(400, "no_token", "could not resolve account token");
-
-  // IG stores a usable access token directly; YT stores a refresh token → exchange for a fresh one.
-  let token = storedToken as string;
-  if (acct.platform === "youtube") {
-    try {
-      token = await youtubeAccessToken(storedToken as string);
-    } catch (e) {
-      log.error("youtube access-token exchange failed", { account: account_id, error: String(e) });
-      return errorResponse(
-        502,
-        "yt_token_exchange_failed",
-        "could not refresh YouTube access token",
-      );
-    }
+  // Nango returns a fresh access token (it owns storage + auto-refresh) for both IG and YT.
+  let token: string;
+  try {
+    token = await getAccessToken(
+      acct.nango_connection_id,
+      acct.provider_config_key ?? acct.platform,
+    );
+  } catch (e) {
+    log.error("nango token fetch failed", { account: account_id, error: String(e) });
+    return errorResponse(502, "token_unavailable", "could not get access token from Nango");
   }
 
   const sinceMs = Date.now() - SINCE_DAYS * 86400_000;

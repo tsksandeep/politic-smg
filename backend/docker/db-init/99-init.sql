@@ -34,3 +34,12 @@ begin
     create publication supabase_realtime;
   end if;
 end $$;
+
+-- 5) Cron → Edge Function config (Supabase Cron / pg_cron). invoke_edge_function() reads these GUCs
+-- at call time, so the SCHEDULED jobs actually drive the pipeline locally — same code as prod, only
+-- the base URL differs (here the in-network Kong functions route; in prod the project functions URL,
+-- set via `alter database postgres set app.functions_base_url = 'https://<ref>.functions.supabase.co'`).
+-- The local Edge Functions run with verifyJWT=false, but the helper still requires a service key to
+-- be present, so we set the local demo service-role key as a GUC (prod stores it in Vault).
+alter database postgres set app.functions_base_url to 'http://kong:8000/functions/v1';
+alter database postgres set app.service_role_key to 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';

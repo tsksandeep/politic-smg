@@ -10,15 +10,28 @@
 //            (code + fb_exchange_token), GET /meta/graph/me/accounts, GET /meta/graph/<ig>/media
 //   Google:  GET /google/auth (consent → redirect), POST /google/token,
 //            GET /youtube/v3/{channels,playlistItems,commentThreads}
-//   AI:      POST /openrouter/v1/chat/completions, POST /gemini/v1beta/models/<m>:embedContent
+//   AI:      POST /openrouter/v1/chat/completions, POST /vertex/.../<model>:predict (embeddings)
 
 const PORT = Number(Deno.env.get("MOCK_PORT") ?? "9100");
 const EMBED_DIM = 768;
 const COMMENT_COUNT = Number(Deno.env.get("MOCK_COMMENT_COUNT") ?? "30"); // > min_volume (25)
 
 const HOSTILE_LEXICON = [
-  "corrupt", "liar", "fail", "resign", "traitor", "shame", "fraud", "worst", "cheat",
-  "betray", "useless", "scam", "broken promise", "loot", "fake",
+  "corrupt",
+  "liar",
+  "fail",
+  "resign",
+  "traitor",
+  "shame",
+  "fraud",
+  "worst",
+  "cheat",
+  "betray",
+  "useless",
+  "scam",
+  "broken promise",
+  "loot",
+  "fake",
 ];
 const POSITIVE_LEXICON = ["great", "love", "support", "best", "proud", "thank"];
 
@@ -111,16 +124,27 @@ async function handler(req: Request): Promise<Response> {
 
   // --- Meta Graph token exchange (auth code) AND refresh (fb_exchange_token) ---
   if (path === "/meta/graph/oauth/access_token") {
-    return json({ access_token: "mock_ig_token_" + crypto.randomUUID(), token_type: "bearer", expires_in: 5184000 });
+    return json({
+      access_token: "mock_ig_token_" + crypto.randomUUID(),
+      token_type: "bearer",
+      expires_in: 5184000,
+    });
   }
   // --- Google token exchange ---
   if (path === "/google/token") {
-    return json({ access_token: "mock_yt_token_" + crypto.randomUUID(), token_type: "Bearer", expires_in: 3600, refresh_token: "mock_yt_refresh" });
+    return json({
+      access_token: "mock_yt_token_" + crypto.randomUUID(),
+      token_type: "Bearer",
+      expires_in: 3600,
+      refresh_token: "mock_yt_refresh",
+    });
   }
 
   // --- Meta: resolve the connected IG Business account ---
   if (path === "/meta/graph/me/accounts") {
-    return json({ data: [{ id: "fb_page_mock_1", instagram_business_account: { id: "ig_biz_mock_1" } }] });
+    return json({
+      data: [{ id: "fb_page_mock_1", instagram_business_account: { id: "ig_biz_mock_1" } }],
+    });
   }
 
   // --- Meta: media (posts) + their comments for the last 30 days ---
@@ -142,13 +166,20 @@ async function handler(req: Request): Promise<Response> {
 
   // --- YouTube Data API ---
   if (path === "/youtube/v3/channels") {
-    if (url.searchParams.get("mine") === "true") return json({ items: [{ id: "yt_channel_mock_1" }] });
-    return json({ items: [{ contentDetails: { relatedPlaylists: { uploads: "UU_mock_uploads" } } }] });
+    if (url.searchParams.get("mine") === "true") {
+      return json({ items: [{ id: "yt_channel_mock_1" }] });
+    }
+    return json({
+      items: [{ contentDetails: { relatedPlaylists: { uploads: "UU_mock_uploads" } } }],
+    });
   }
   if (path === "/youtube/v3/playlistItems") {
     return json({
       items: [{
-        contentDetails: { videoId: "yt_vid_mock_1", videoPublishedAt: new Date(Date.now() - 3600_000).toISOString() },
+        contentDetails: {
+          videoId: "yt_vid_mock_1",
+          videoPublishedAt: new Date(Date.now() - 3600_000).toISOString(),
+        },
       }],
     });
   }
@@ -172,27 +203,33 @@ async function handler(req: Request): Promise<Response> {
   if (path === "/openrouter/v1/chat/completions") {
     const body = await req.json().catch(() => ({}));
     const wantsJson = body?.response_format?.type === "json_object";
-    const userMsg = [...(body?.messages ?? [])].reverse().find((m: { role: string }) => m.role === "user");
+    const userMsg = [...(body?.messages ?? [])].reverse().find((m: { role: string }) =>
+      m.role === "user"
+    );
     const content: string = userMsg?.content ?? "";
     if (wantsJson) {
       return json({ choices: [{ message: { content: JSON.stringify(classify(content)) } }] });
     }
     // Summarization request (detect-narratives): return a short theme label.
     return json({
-      choices: [{ message: { content: "Coordinated attack alleging broken promises and corruption." } }],
+      choices: [{
+        message: { content: "Coordinated attack alleging broken promises and corruption." },
+      }],
     });
   }
 
-  // --- Gemini embeddings ---
-  if (path.startsWith("/gemini/") && path.includes(":embedContent")) {
+  // --- Vertex AI embeddings (gemini-embedding-001 :predict) ---
+  if (path.startsWith("/vertex/") && path.endsWith(":predict")) {
     const body = await req.json().catch(() => ({}));
-    const text: string = body?.content?.parts?.[0]?.text ?? "";
-    return json({ embedding: { values: embedFor(text) } });
+    const text: string = body?.instances?.[0]?.content ?? "";
+    return json({ predictions: [{ embeddings: { values: embedFor(text) } }] });
   }
 
   return json({ error: "mock_not_found", path }, 404);
 }
 
 console.log(`[mock] external-API mock listening on http://0.0.0.0:${PORT}`);
-console.log(`[mock] reachable as http://localhost:${PORT} (host) and http://host.docker.internal:${PORT} (containers)`);
+console.log(
+  `[mock] reachable as http://localhost:${PORT} (host) and http://host.docker.internal:${PORT} (containers)`,
+);
 Deno.serve({ port: PORT, hostname: "0.0.0.0" }, handler);

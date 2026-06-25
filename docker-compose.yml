@@ -157,8 +157,7 @@ services:
         "ingest-youtube":{"verifyJWT":false,"entrypointPath":"supabase/functions/ingest-youtube/index.ts"},
         "oauth-callback":{"verifyJWT":false,"entrypointPath":"supabase/functions/oauth-callback/index.ts"},
         "oauth-start":{"verifyJWT":false,"entrypointPath":"supabase/functions/oauth-start/index.ts"},
-        "retention-purge":{"verifyJWT":false,"entrypointPath":"supabase/functions/retention-purge/index.ts"},
-        "token-refresh":{"verifyJWT":false,"entrypointPath":"supabase/functions/token-refresh/index.ts"}}
+        "retention-purge":{"verifyJWT":false,"entrypointPath":"supabase/functions/retention-purge/index.ts"}}
     volumes:
       # Mount only functions/ + shared/ (NOT deno.lock/deno.json): the edge-runtime's Deno is older
       # than the toolchain that wrote deno.lock (v5) and would fail to read it. No import map is
@@ -218,6 +217,65 @@ services:
     volumes:
       - ./backend/supabase:/app:ro
 
+  # --- Self-hosted Nango: manages all cadre OAuth (token vault + auto-refresh). -------------------
+  # Local providers.yaml points OAuth at the mock (:9100), so onboarding runs offline; prod doesn't
+  # mount it → real Meta/Google URLs. (Auth-only: no Redis/Elasticsearch needed.)
+  nango-db:
+    image: postgres:16.0-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nango
+      POSTGRES_PASSWORD: nango
+      POSTGRES_DB: nango
+    volumes:
+      - nango-data:/var/lib/postgresql/data
+
+  nango-server:
+    image: nangohq/nango-server:hosted
+    platform: linux/amd64
+    restart: unless-stopped
+    depends_on:
+      - nango-db
+    environment:
+      # Local-dev value (NOT a secret); prod generates its own. base64 of a 32-byte key.
+      NANGO_ENCRYPTION_KEY: "c2VsZi1ob3N0ZWQtbG9jYWwtbm90LXNlY3JldC0zMmI="
+      NANGO_DB_USER: nango
+      NANGO_DB_PASSWORD: nango
+      NANGO_DB_HOST: nango-db
+      NANGO_DB_NAME: nango
+      SERVER_PORT: "3003"
+      NANGO_SERVER_URL: http://localhost:3003
+      NANGO_PUBLIC_SERVER_URL: http://localhost:3003
+      FLAG_AUTH_ENABLED: "false"
+      NANGO_DASHBOARD_USERNAME: admin
+      NANGO_DASHBOARD_PASSWORD: admin
+      FLAG_SERVE_CONNECT_UI: "true"
+    volumes:
+      - ./backend/docker/nango/providers.yaml:/app/nango/packages/providers/providers.yaml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "3003:3003" # API + OAuth callback (browser-reachable)
+      - "3009:3009" # Connect UI (browser-reachable)
+
+  # One-shot: read Nango's generated secret key, create the integrations, publish the key to the
+  # Supabase DB as a GUC so the Edge Functions can use it. Keeps `docker compose up` turnkey.
+  nango-init:
+    image: denoland/deno:2.4.5
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nango-server:
+        condition: service_started
+    entrypoint: ["deno", "run", "--allow-net", "--allow-env", "/nango-init.ts"]
+    environment:
+      NANGO_HOST: http://nango-server:3003
+      NANGO_DB_URL: postgresql://nango:nango@nango-db:5432/nango
+      SUPABASE_ADMIN_DB_URL: postgresql://supabase_admin:postgres@db:5432/postgres
+    volumes:
+      - ./backend/docker/nango-init.ts:/nango-init.ts:ro
+    restart: on-failure
+
   web:
     build:
       context: ./frontend
@@ -233,6 +291,8 @@ services:
     environment:
       VITE_SUPABASE_URL: "http://localhost:54321"
       VITE_SUPABASE_ANON_KEY: "${SUPABASE_LOCAL_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0}"
+      # Self-hosted Nango (browser-reachable): Connect UI + API. Prod → the deployed Nango URL.
+      VITE_NANGO_HOST: "http://localhost:3003"
       CHOKIDAR_USEPOLLING: "true"
     volumes:
       - ./frontend:/app
@@ -242,3 +302,4 @@ services:
 
 volumes:
   db-data:
+  nango-data:

@@ -1,12 +1,16 @@
-// Onboarding (T040) — cadre consent UI (User Story 2). Connect a Creator/Business IG or
-// YouTube account (redirects to platform consent), list connected accounts, and disconnect.
-// Unsupported account types are surfaced as guidance (no data collected).
+// Onboarding (T040) — cadre consent UI (User Story 2). Connect a Creator/Business IG or YouTube
+// account via the Nango Connect UI (consent runs through self-hosted Nango), list connected
+// accounts, and disconnect. Unsupported account types are surfaced as guidance (no data collected).
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import Nango from "@nangohq/frontend";
 import { supabase } from "../services/supabase";
 import AppShell from "../components/AppShell";
 import { CLASH, color, MONO } from "../theme";
+
+// Browser-reachable Nango (Connect UI + API). Local → localhost:3003; prod → the deployed Nango.
+const NANGO_HOST = import.meta.env.VITE_NANGO_HOST as string;
 
 const ICON: Record<string, string> = {
   instagram:
@@ -51,32 +55,53 @@ export default function Onboarding() {
 
   useEffect(() => {
     load();
-    // Surface the result of an oauth-callback redirect (it returns the browser here with a status).
-    const err = params.get("error");
-    if (err === "unsupported_account_type") {
-      setNotice("That account type isn't supported. Switch to a Creator/Business account, then reconnect.");
-    } else if (err === "exchange_failed") {
-      setNotice("We couldn't complete the authorization. Please try connecting again.");
-    } else if (err === "account_error") {
-      setNotice("Something went wrong saving the connection. Please try again.");
-    } else if (params.get("connected") === "1") {
-      setNotice("Account connected. We're backfilling the last 30 days of posts and comments.");
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Persist a completed Nango connection (the SPA side of oauth-callback).
+  async function recordConnection(platform: string, connectionId: string) {
+    const rec = await fetch(`${FN}/oauth-callback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${await token()}` },
+      body: JSON.stringify({ cadre_id: cadreId, platform, connection_id: connectionId }),
+    });
+    if (rec.ok) {
+      setNotice("Account connected. We're backfilling the last 30 days of posts and comments.");
+      load();
+    } else if (rec.status === 422) {
+      setNotice("That account type isn't supported. Switch to a Creator/Business account, then reconnect.");
+    } else {
+      setNotice("Something went wrong saving the connection. Please try again.");
+    }
+  }
 
   async function connect(platform: "instagram" | "youtube") {
     if (!cadreId) {
       setNotice("No cadre selected. Open this page with a ?cadre=<id> for the cadre being connected.");
       return;
     }
+    // 1) ask the backend for a Nango connect session, 2) open the Nango Connect UI, 3) on success
+    // record the returned connection id. Nango stores + auto-refreshes the token (no token here).
     const res = await fetch(`${FN}/oauth-start`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${await token()}` },
       body: JSON.stringify({ cadre_id: cadreId, platform }),
     });
-    const { authorize_url } = await res.json();
-    if (authorize_url) location.href = authorize_url;
+    const { connect_session_token } = await res.json();
+    if (!connect_session_token) {
+      setNotice("Couldn't start the connection. Please try again.");
+      return;
+    }
+    const nango = new Nango({ connectSessionToken: connect_session_token, host: NANGO_HOST });
+    nango.openConnectUI({
+      apiURL: NANGO_HOST,
+      onEvent: (event) => {
+        if (event.type === "connect") {
+          const connectionId = event.payload?.connectionId;
+          if (connectionId) recordConnection(platform, connectionId);
+        }
+      },
+    });
   }
 
   async function disconnect(id: string) {

@@ -40,20 +40,25 @@ alter publication supabase_realtime add table alert;
 
 ## 4. Configure secrets (never in code — see docs/secrets.md)
 
+First stand up **Nango** (self-hosted, India region): register the `instagram` + `youtube`
+integrations with the real Facebook/Google client id+secret, and copy its environment Secret Key.
+
 ```bash
 supabase secrets set \
   OPENROUTER_API_KEY=... \
-  GEMINI_EMBEDDING_API_KEY=... \
-  IG_APP_ID=... IG_APP_SECRET=... IG_WEBHOOK_VERIFY_TOKEN=... \
-  YT_CLIENT_ID=... YT_CLIENT_SECRET=... \
+  VERTEX_EMBEDDINGS_URL="https://asia-south1-aiplatform.googleapis.com/v1/projects/<p>/locations/asia-south1/publishers/google/models/gemini-embedding-001:predict" \
+  VERTEX_SA_EMAIL=... VERTEX_SA_PRIVATE_KEY="..." \
+  NANGO_HOST="https://<your-nango-host>" NANGO_SECRET_KEY=... \
+  IG_APP_SECRET=... IG_WEBHOOK_VERIFY_TOKEN=... \
   COMMENTER_HASH_KEY="$(openssl rand -hex 32)" \
   FUNCTIONS_BASE_URL="https://<project-ref>.functions.supabase.co" \
   FRONTEND_ORIGIN="https://<your-deployed-frontend-origin>"
 ```
 - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are injected into Edge
   Functions automatically by the platform.
-- `FUNCTIONS_BASE_URL` is the OAuth `redirect_uri` base (oauth-start/-callback) and the
-  inter-function call base (oauth-callback → backfill).
+- Cadre OAuth + token storage/refresh is handled by **Nango** (the app only needs `NANGO_HOST` +
+  `NANGO_SECRET_KEY`); platform OAuth client creds live inside Nango, not here.
+- `FUNCTIONS_BASE_URL` is the inter-function call base (oauth-callback → backfill).
 - `FRONTEND_ORIGIN` is **required in production**: it is the CORS allow-origin for the SPA→function
   calls AND where `oauth-callback` redirects the cadre's browser after consent. If unset it
   defaults to `*` (CORS) and `http://localhost:5173` (the redirect), which is wrong off your laptop.
@@ -68,7 +73,7 @@ skipped or rejected:
 alter database postgres set app.functions_base_url = 'https://<project-ref>.functions.supabase.co';
 
 -- Service-role key in Vault — sent as the Bearer so the gateway's verify_jwt check passes
--- (analyze-comments, detect-narratives, ingest-youtube, token-refresh, retention-purge):
+-- (analyze-comments, detect-narratives, ingest-youtube, retention-purge):
 select vault.create_secret('<SERVICE_ROLE_KEY>', 'service_role_key');
 ```
 > `ig-webhook` and `oauth-callback` are public (no JWT) and are declared `verify_jwt = false`
@@ -89,7 +94,6 @@ supabase functions deploy oauth-callback     # public: set Enforce-JWT = off (co
 supabase functions deploy accounts
 supabase functions deploy account-revoke
 supabase functions deploy backfill
-supabase functions deploy token-refresh
 # Ingestion + retention:
 supabase functions deploy ig-webhook         # public: set Enforce-JWT = off (config.toml verify_jwt=false)
 supabase functions deploy retention-purge    # LAUNCH-BLOCKING — must be live before real data

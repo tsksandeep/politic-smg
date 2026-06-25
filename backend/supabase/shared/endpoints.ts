@@ -11,7 +11,7 @@
 //   googleTokenUrl  → oauth-callback (YouTube token exchange)
 //   youtubeApi      → oauth-callback (channels), backfill, ingest-youtube
 //   openRouter      → shared/llm.ts (chat completions)
-//   gemini          → shared/embeddings.ts (embeddings)
+//   vertexEmbeddings→ shared/embeddings.ts (Vertex AI :predict — project/region specific, no default)
 
 function base(key: string, fallback: string): string {
   return (Deno.env.get(key) ?? fallback).replace(/\/+$/, "");
@@ -27,7 +27,10 @@ export const ENDPOINTS = {
   googleTokenUrl: base("GOOGLE_TOKEN_URL", "https://oauth2.googleapis.com/token"),
   // YouTube Data API v3 (base; callers append /channels, /playlistItems, /commentThreads)
   youtubeApi: base("YOUTUBE_API_BASE", "https://www.googleapis.com/youtube/v3"),
-  // AI (bases; callers append /chat/completions and /models/<model>:embedContent)
+  // AI
   openRouter: base("OPENROUTER_BASE", "https://openrouter.ai/api/v1"),
-  gemini: base("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta"),
+  // Vertex AI embeddings :predict — full URL is project/region-specific, so no universal default;
+  // set per deployment (prod: https://asia-south1-aiplatform.googleapis.com/v1/projects/<id>/
+  // locations/asia-south1/publishers/google/models/gemini-embedding-001:predict).
+  vertexEmbeddings: base("VERTEX_EMBEDDINGS_URL", ""),
 };

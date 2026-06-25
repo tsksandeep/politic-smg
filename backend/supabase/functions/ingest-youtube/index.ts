@@ -9,13 +9,13 @@ import { serviceClient } from "../../shared/db.ts";
 import { ENDPOINTS } from "../../shared/endpoints.ts";
 import { hashCommenter } from "../../shared/hash.ts";
 import { jsonResponse, logger } from "../../shared/log.ts";
-import { youtubeAccessToken } from "../../shared/youtube.ts";
+import { getAccessToken } from "../../shared/nango.ts";
 
 const log = logger("ingest-youtube");
 const API = ENDPOINTS.youtubeApi;
 const DAILY_UNIT_BUDGET = Number(Deno.env.get("YT_DAILY_UNIT_BUDGET") ?? "9000");
 const CHANNELS_PER_RUN = Number(Deno.env.get("YT_CHANNELS_PER_RUN") ?? "50");
-// Optional local-test escape hatch: bypass per-channel Vault resolution with a fixed access token.
+// Optional local-test escape hatch: bypass per-channel Nango resolution with a fixed access token.
 const TOKEN_OVERRIDE = Deno.env.get("YT_ACCESS_TOKEN_OVERRIDE") ?? "";
 
 async function ytGet(path: string, params: Record<string, string>, accessToken: string) {
@@ -42,7 +42,7 @@ Deno.serve(async () => {
   // Round-robin a batch of connected channels (oldest last_ingested first).
   const { data: accounts } = await db
     .from("connected_account")
-    .select("id, external_id")
+    .select("id, external_id, nango_connection_id, provider_config_key")
     .eq("platform", "youtube")
     .eq("consent_status", "connected")
     .limit(CHANNELS_PER_RUN);
@@ -53,19 +53,19 @@ Deno.serve(async () => {
       break;
     }
 
-    // Resolve a fresh access token: read the stored refresh token from Vault and exchange it
-    // (YT access tokens are short-lived). A local override bypasses this for offline tests.
+    // Nango returns a fresh access token (it owns refresh). A local override bypasses it for tests.
     let accessToken: string;
     try {
       if (TOKEN_OVERRIDE) {
         accessToken = TOKEN_OVERRIDE;
+      } else if (!acct.nango_connection_id) {
+        log.warn("no Nango connection; skipping channel", { account: acct.id });
+        continue;
       } else {
-        const { data: refresh } = await db.rpc("read_account_token", { p_account: acct.id });
-        if (!refresh) {
-          log.warn("no refresh token in vault; skipping channel", { account: acct.id });
-          continue;
-        }
-        accessToken = await youtubeAccessToken(refresh as string);
+        accessToken = await getAccessToken(
+          acct.nango_connection_id,
+          acct.provider_config_key ?? "youtube",
+        );
       }
     } catch (e) {
       log.error("token resolution failed; skipping channel", {
