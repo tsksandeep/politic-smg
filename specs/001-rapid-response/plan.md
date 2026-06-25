@@ -22,7 +22,8 @@ TypeScript + React for the dashboard.
 
 **Primary Dependencies**: Supabase (Postgres, Auth, Realtime, Storage, Edge Functions),
 `pgvector`, `pgmq`, `pg_cron`; OpenRouter API (Gemini 2.5 Flash / Flash-Lite); a Gemini
-embedding model (direct Google AI/Vertex call); Instagram Graph API; YouTube Data API v3.
+embedding model (direct Vertex AI call, India region); a self-hosted **Nango** instance
+(brokers cadre OAuth, owns token storage + auto-refresh); Instagram Graph API; YouTube Data API v3.
 
 **Storage**: Supabase Postgres (relational + pgvector); Supabase Storage (raw API payload
 archive). No separate vector store.
@@ -84,16 +85,20 @@ backend/
 └── supabase/
     ├── migrations/             # schema, pgvector, RLS policies, pgmq queues, pg_cron jobs
     ├── functions/              # Edge Functions (Deno/TypeScript)
-    │   ├── oauth-start/         # begin cadre consent (IG/YT)
-    │   ├── oauth-callback/      # exchange code, store token in Vault, register account
-    │   ├── ingest-youtube/      # pg_cron-driven polling of connected YT channels
+    │   ├── oauth-start/         # begin cadre consent — open a Nango connect session (IG/YT)
+    │   ├── oauth-callback/      # record the completed Nango connection, register account, kick backfill
+    │   ├── backfill/            # one-time 30-day post+comment backfill on connect
+    │   ├── accounts/            # list connected accounts; account-revoke/ stops + purges
+    │   ├── ingest-youtube/      # pg_cron-driven polling of connected YT channels (quota-gated)
     │   ├── ig-webhook/          # Instagram comment/mention webhook receiver
-    │   ├── analyze-comments/    # pgmq consumer → OpenRouter (Gemini) classification
+    │   ├── analyze-comments/    # pgmq consumer → OpenRouter (Gemini) classification + embedding
     │   ├── detect-narratives/   # cluster + threshold → raise/update alerts
-    │   ├── token-refresh/       # pg_cron IG long-lived token refresh
-    │   └── retention-purge/     # pg_cron 30-day raw-text deletion
+    │   ├── detection-settings/  # admin-tunable global thresholds (GET/PUT)
+    │   ├── alert-detail/, alert-triage/   # board drill-down + triage lifecycle
+    │   └── retention-purge/     # pg_cron 30-day raw-text deletion + revoked-account purge
+    │   # (token refresh is delegated to Nango — no token-refresh function in the app)
     ├── tests/                  # pgTAP (schema/RLS), Deno tests (functions)
-    └── shared/                 # shared TS types, hashing + label utilities
+    └── shared/                 # db, nango, llm, embeddings, hash, labels, endpoints, log
 
 frontend/
 ├── src/

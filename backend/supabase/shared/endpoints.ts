@@ -4,11 +4,10 @@
 // differ ONLY by these env values: in prod they are unset (real defaults apply); in local dev
 // they point at backend/supabase/mocks/server.ts. No code path branches on environment.
 //
-// Consumers:
-//   graphApi        → oauth-callback (token, me/accounts), token-refresh, backfill (media)
-//   facebookDialog  → oauth-start (browser consent URL)
-//   googleAuthDialog→ oauth-start (browser consent URL)
-//   googleTokenUrl  → oauth-callback (YouTube token exchange)
+// Consumers (cadre OAuth itself is brokered by Nango — see shared/nango.ts — so the app holds no
+// consent-dialog URLs; tokens used below are fetched fresh from Nango per call):
+//   graphApi        → oauth-callback (me/accounts), backfill (media)
+//   googleTokenUrl  → shared/embeddings.ts (mint Vertex access token from the service-account JWT)
 //   youtubeApi      → oauth-callback (channels), backfill, ingest-youtube
 //   openRouter      → shared/llm.ts (chat completions)
 //   vertexEmbeddings→ shared/embeddings.ts (Vertex AI :predict — project/region specific, no default)
@@ -18,12 +17,10 @@ function base(key: string, fallback: string): string {
 }
 
 export const ENDPOINTS = {
-  // Meta / Facebook / Instagram Graph (base; callers append /oauth/access_token, /me/accounts, /<id>/media)
+  // Meta / Facebook / Instagram Graph (base; callers append /me/accounts, /<id>/media)
   graphApi: base("GRAPH_API_BASE", "https://graph.facebook.com/v21.0"),
-  // Browser consent dialogs (full URLs; callers append a query string)
-  facebookDialog: base("FACEBOOK_DIALOG_URL", "https://www.facebook.com/v21.0/dialog/oauth"),
-  googleAuthDialog: base("GOOGLE_AUTH_URL", "https://accounts.google.com/o/oauth2/v2/auth"),
-  // Google OAuth token exchange (full URL; POST)
+  // Google OAuth token endpoint — used to mint a Vertex AI access token from the embedding
+  // service-account JWT (NOT for cadre OAuth, which Nango handles).
   googleTokenUrl: base("GOOGLE_TOKEN_URL", "https://oauth2.googleapis.com/token"),
   // YouTube Data API v3 (base; callers append /channels, /playlistItems, /commentThreads)
   youtubeApi: base("YOUTUBE_API_BASE", "https://www.googleapis.com/youtube/v3"),

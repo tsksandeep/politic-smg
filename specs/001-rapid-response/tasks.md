@@ -27,7 +27,7 @@ and quickstart.md defines validation scenarios V1–V5.
 - [x] T002 [P] Initialize Supabase project config pinned to an India region; enable `pgvector`, `pgmq`, `pg_cron` in `backend/supabase/config.toml`
 - [x] T003 [P] Scaffold React + TypeScript + Vite app with Supabase client in `frontend/`
 - [x] T004 [P] Configure linting/formatting (Deno fmt/lint for functions; ESLint/Prettier for frontend) in repo root config files
-- [x] T005 [P] Configure Supabase Vault entries for OpenRouter, Gemini embeddings, Instagram app, YouTube app (no secrets in code) — document in `docs/secrets.md`
+- [x] T005 [P] Configure secrets (no secrets in code): OpenRouter, Vertex embeddings SA, `NANGO_HOST`/`NANGO_SECRET_KEY`, Instagram webhook secret; platform OAuth *client* creds live inside Nango; service-role key in Supabase Vault for cron — document in `docs/secrets.md`
 - [ ] T006 [GATE] Submit and track the YouTube Data API quota-increase audit (release precondition, Principle VII) in `docs/quota-audit.md` — BLOCKED on external Google audit; code gate enforced (YT_INGEST_ENABLED)
 
 ---
@@ -101,11 +101,11 @@ try a personal account → guided, no data collected.
 ### Implementation for User Story 2
 
 - [x] T034 [US2] Implement POST /oauth-start in `backend/supabase/functions/oauth-start/index.ts`
-- [x] T035 [US2] Implement GET /oauth-callback (token→Vault, create connected_account, enqueue backfill, reject unsupported type) in `backend/supabase/functions/oauth-callback/index.ts` (depends T005)
+- [x] T035 [US2] Implement POST /oauth-callback (record Nango connection, resolve supported account, create connected_account, kick backfill, reject unsupported type) in `backend/supabase/functions/oauth-callback/index.ts` (depends T005)
 - [x] T036 [US2] Implement 30-day backfill job (FR-010a) in `backend/supabase/functions/backfill/index.ts`
 - [x] T037 [US2] Implement POST /accounts/{id}/revoke + purge scheduling (FR-010) in `backend/supabase/functions/account-revoke/index.ts`
 - [x] T037a [US2] On revoke, recompute affected narratives/alerts so a revoked account's data drops out mid-incident (edge case "consent revoked mid-incident"; depends T025, T037) in `backend/supabase/functions/detect-narratives/index.ts`
-- [x] T038 [US2] Implement token-refresh pg_cron function (~60-day IG lifecycle) in `backend/supabase/functions/token-refresh/index.ts`
+- [x] ~~T038 [US2] Implement token-refresh pg_cron function (~60-day IG lifecycle)~~ — **superseded** by the Nango migration (`0016_nango.sql`): Nango owns token storage + auto-refresh, so there is no `token-refresh` function or cron in the app (R9).
 - [x] T039 [US2] Implement GET /accounts in `backend/supabase/functions/accounts/index.ts`
 - [x] T040 [P] [US2] Build cadre onboarding UI (connect/disconnect, unsupported-type guidance) in `frontend/src/pages/Onboarding.tsx`
 
@@ -143,6 +143,23 @@ latency recorded.
 - [x] T048 [P] Performance pass: confirm alerts surface ≤15 min under representative load (SC-001) — record in `docs/perf.md`
 - [x] T049 [P] Documentation updates and cross-links in `docs/` and `README.md`
 - [x] T050 Run quickstart.md validation scenarios V1–V5 and record results in `docs/acceptance.md`
+
+---
+
+## Phase 7: Delivered Extensions (beyond the core 001 spec)
+
+Shipped alongside the wedge and reflected in `spec.md` (§Delivered beyond the core wedge),
+`data-model.md`, and `research.md` R9. Listed here so the ledger matches the codebase.
+
+- [x] T051 Migrate per-cadre OAuth + token storage from Supabase Vault to a self-hosted **Nango** instance: `nango_connection_id`/`provider_config_key` on `connected_account`, drop Vault token functions, remove the `token-refresh` cron, add `app_config` in `backend/supabase/migrations/0016_nango.sql` + `backend/supabase/shared/nango.ts` (R9). Frontend uses the Nango connect SDK in `frontend/src/pages/Onboarding.tsx`.
+- [x] T052 Add **favourable (pro-party) narratives**: `narrative.stance` enum + dual-stance clustering (anti-party alerts only; pro-party tracked, never alerted) in `backend/supabase/migrations/0012_favourable_and_coverage.sql`; `narrative_board` view with `performance_score`.
+- [x] T053 Add **cadre coverage + drill-downs**: `cadre_coverage` view (0012) and anonymized `cadre_narrative` / `cadre_comment` views in `backend/supabase/migrations/0013_detail_views.sql`; `frontend/src/pages/{Board,CadreDetail,NarrativeDetail}.tsx` (Recharts coverage/donut).
+- [x] T054 Queue-based analysis pipeline hardening: `enqueue/reconcile/claim/complete/fail` pgmq wrappers with poison-message DLQ cap in `backend/supabase/migrations/0014_analyze_queue.sql`.
+
+> Scope note (CPO): these are an early, low-cost slice of the Phase-2 performance-analytics
+> roadmap (README §11). They reuse the same consented dataset and add no new write paths or
+> citizen-identifying data, so they stay inside the constitution. Full Phase-2 (unique engaged
+> audience, cadre-overlap maps) remains a separate future feature.
 
 ---
 

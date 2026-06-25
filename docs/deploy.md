@@ -21,22 +21,28 @@ Prereqs on your machine: `supabase` CLI (≥2.39), `deno` (≥2.4), `node` (≥2
 
 ```bash
 cd backend/supabase
-supabase db push        # applies migrations/0001..0011 in order
+supabase db push        # applies migrations/0001..0016 in order
 ```
 This creates the schema, pgvector columns + HNSW indexes, RLS policies, Auth role trigger,
-pgmq queues, pg_cron jobs (with authenticated invocation — 0010), the alert_board view, the
-detection + retention functions, and Vault token storage/rotation (0008/0011).
+pgmq queues + queue wrappers (0014), pg_cron jobs (authenticated invocation — 0010), the
+alert_board / narrative_board / cadre_* views, the detection + retention functions, the
+favourable + coverage views (0012–0013), and the Nango account columns (0016, which also drops
+the old Vault token functions from 0008/0011). Adds `alert` + `narrative` to the Realtime
+publication (0012).
 
 > The embedding dimension is **768** (migration 0002 + `shared/embeddings.ts`). If you switch
 > embedding models, change BOTH together.
 
-## 3. Enable Realtime on the alert table
+## 3. Verify Realtime on the alert + narrative tables
 
-The war-room board subscribes to `alert` changes (FR-006). Add it to the Realtime publication:
+The war-room board subscribes to `alert` and `narrative` changes (FR-006). Migration **0012**
+already adds both to the `supabase_realtime` publication, so no manual step is needed — just
+confirm it applied on the hosted project:
 ```sql
-alter publication supabase_realtime add table alert;
+select tablename from pg_publication_tables
+where pubname = 'supabase_realtime' and tablename in ('alert','narrative');
 ```
-(Run in the SQL editor, or add as a migration once confirmed on hosted.)
+(Expect both rows. If missing: `alter publication supabase_realtime add table alert, narrative;`)
 
 ## 4. Configure secrets (never in code — see docs/secrets.md)
 
@@ -60,13 +66,13 @@ supabase secrets set \
   `NANGO_SECRET_KEY`); platform OAuth client creds live inside Nango, not here.
 - `FUNCTIONS_BASE_URL` is the inter-function call base (oauth-callback → backfill).
 - `FRONTEND_ORIGIN` is **required in production**: it is the CORS allow-origin for the SPA→function
-  calls AND where `oauth-callback` redirects the cadre's browser after consent. If unset it
-  defaults to `*` (CORS) and `http://localhost:5173` (the redirect), which is wrong off your laptop.
+  calls (including the SPA's POST to `oauth-callback` after the Nango Connect flow). If unset it
+  defaults to `*`, which you do not want in production.
 
 ## 5. Wire pg_cron → Edge Functions
 
 The cron jobs invoke functions over authenticated HTTP (migration 0010). Set **both** the base
-URL and the service-role key, or every scheduled job (analyze/detect/ingest/refresh/purge) is
+URL and the service-role key, or every scheduled job (analyze/detect/ingest/purge) is
 skipped or rejected:
 ```sql
 -- Base URL (persists across sessions):
@@ -167,8 +173,9 @@ pg_prove -d "$DATABASE_URL" tests/rls_settings_test.sql
 
 ### Wiring checklist (close before the pipeline runs end-to-end)
 - [ ] `app.functions_base_url` set, and `service_role_key` stored in Vault (§5) — else **no cron
-      job runs** (analyze/detect/refresh/purge all skip).
-- [ ] `FRONTEND_ORIGIN` function secret set to the deployed SPA origin (§4) — else cadres are
-      redirected to localhost after consent and SPA→function calls are CORS-blocked off-laptop.
+      job runs** (analyze/detect/ingest/purge all skip).
+- [ ] `FRONTEND_ORIGIN` function secret set to the deployed SPA origin (§4) — else SPA→function
+      calls (including the post-consent POST to `oauth-callback`) are CORS-blocked off-laptop.
 - [ ] `ig-webhook` and `oauth-callback` have Enforce-JWT disabled in the dashboard (§6).
-- [ ] Realtime enabled on `alert` (§3) — else the board doesn't update live.
+- [ ] Realtime confirmed on `alert` + `narrative` (§3, applied by migration 0012) — else the
+      board doesn't update live.

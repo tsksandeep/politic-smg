@@ -14,9 +14,9 @@ and does nothing unless the env var **`YT_INGEST_ENABLED=true`**. Production MUS
 unset until the audit is approved. This makes the contingency impossible to bypass by accident
 (the pg_cron schedule can fire, but the function self-disables).
 
-Once the gate opens, the path is functional end-to-end: `ingest-youtube` resolves each channel's
-token from Vault (the durable OAuth **refresh** token stored at consent time) and exchanges it for
-a short-lived access token per run (`shared/youtube.ts`) — no manual token handling. The
+Once the gate opens, the path is functional end-to-end: `ingest-youtube` reads a fresh access
+token from **Nango** per run via the channel's `nango_connection_id` (`shared/nango.ts`
+`getAccessToken`) — Nango owns storage + auto-refresh, so there is no manual token handling. The
 `YT_ACCESS_TOKEN_OVERRIDE` env var remains only as a local-test escape hatch and is empty in prod.
 
 ## How to submit the audit (human action — requires your GCP project)

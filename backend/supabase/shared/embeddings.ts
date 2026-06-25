@@ -1,17 +1,19 @@
-// shared/embeddings.ts (T015) — embeddings via Vertex AI gemini-embedding-001, pinned to an India
-// region (asia-south1) so comment text is embedded IN-COUNTRY (DPDP / Principle III). Replaces the
-// deprecated text-embedding-004 on the global Generative Language endpoint.
+// shared/embeddings.ts (T015) — comment embeddings, written into pgvector for clustering.
 //
-// Same code in local and prod — only the URLs (env) change:
-//   • VERTEX_EMBEDDINGS_URL → the mock locally, the asia-south1 :predict endpoint in prod.
-//   • Auth is a Google OAuth bearer (Vertex is not API-key based). A static VERTEX_ACCESS_TOKEN
-//     short-circuits minting (used locally; the mock ignores it). Otherwise a token is minted from a
-//     service-account JWT via ENDPOINTS.googleTokenUrl (itself env-driven → mock locally, Google in
-//     prod) and cached until shortly before expiry.
-// EMBED_DIM MUST equal the vector(...) dimension in migration 0002_vector.sql (768).
+// Provider is selected by env (EMBEDDINGS_PROVIDER), so the same code serves prod and local:
+//   • "vertex" (default) — Vertex AI gemini-embedding-001, pinned to an India region (asia-south1)
+//     so comment text is embedded IN-COUNTRY (DPDP / Principle III). Auth is a Google OAuth bearer
+//     (a static VERTEX_ACCESS_TOKEN short-circuits minting; otherwise minted from a service-account
+//     JWT via ENDPOINTS.googleTokenUrl and cached until shortly before expiry).
+//   • "openai" — any OpenAI-compatible /v1/embeddings server (e.g. a local LM Studio running
+//     EmbeddingGemma at http://host.docker.internal:1234/v1). Used for local dev now; switch back
+//     to "vertex" for the India-region cloud deployment with no code change.
+// EMBED_DIM MUST equal the vector(...) dimension in migration 0002_vector.sql (768). EmbeddingGemma
+// is natively 768-dim, matching gemini-embedding-001's outputDimensionality here.
 
 import { ENDPOINTS } from "./endpoints.ts";
 
+const PROVIDER = Deno.env.get("EMBEDDINGS_PROVIDER") ?? "vertex"; // "vertex" (prod) | "openai" (local)
 const MODEL = Deno.env.get("VERTEX_EMBEDDING_MODEL") ?? "gemini-embedding-001";
 export const EMBED_DIM = Number(Deno.env.get("EMBED_DIM") ?? "768");
 
@@ -89,8 +91,7 @@ async function accessToken(): Promise<string> {
   return token;
 }
 
-/** Returns an EMBED_DIM-length embedding for a single text (Vertex :predict). */
-export async function embed(text: string): Promise<number[]> {
+async function embedVertex(text: string): Promise<number[]> {
   const url = ENDPOINTS.vertexEmbeddings;
   if (!url) throw new Error("VERTEX_EMBEDDINGS_URL is not set");
   const res = await fetch(url, {
@@ -108,7 +109,34 @@ export async function embed(text: string): Promise<number[]> {
     throw new Error(`Vertex embedding (${MODEL}) error ${res.status}: ${await res.text()}`);
   }
   const data = await res.json();
-  const values: number[] = data.predictions?.[0]?.embeddings?.values ?? [];
+  return data.predictions?.[0]?.embeddings?.values ?? [];
+}
+
+// OpenAI-compatible embeddings (POST {base}/embeddings → { data: [{ embedding }] }). For local
+// servers like LM Studio; no key needed (sent only if EMBEDDINGS_API_KEY is set).
+async function embedOpenAI(text: string): Promise<number[]> {
+  const base = (Deno.env.get("EMBEDDINGS_BASE") ?? "").replace(/\/+$/, "");
+  if (!base) throw new Error("EMBEDDINGS_BASE is not set (EMBEDDINGS_PROVIDER=openai)");
+  const model = Deno.env.get("EMBEDDINGS_MODEL") ?? "text-embedding-embeddinggemma-300m";
+  const key = Deno.env.get("EMBEDDINGS_API_KEY") ?? "";
+  const res = await fetch(`${base}/embeddings`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(key ? { "Authorization": `Bearer ${key}` } : {}),
+    },
+    body: JSON.stringify({ model, input: text }),
+  });
+  if (!res.ok) {
+    throw new Error(`OpenAI embedding (${model}) error ${res.status}: ${await res.text()}`);
+  }
+  const data = await res.json();
+  return data.data?.[0]?.embedding ?? [];
+}
+
+/** Returns an EMBED_DIM-length embedding for a single text (provider chosen by EMBEDDINGS_PROVIDER). */
+export async function embed(text: string): Promise<number[]> {
+  const values = PROVIDER === "openai" ? await embedOpenAI(text) : await embedVertex(text);
   if (values.length !== EMBED_DIM) {
     throw new Error(`embedding dim ${values.length} != EMBED_DIM ${EMBED_DIM}`);
   }

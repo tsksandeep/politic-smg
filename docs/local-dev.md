@@ -51,11 +51,23 @@ coverage). To promote your user to Admin: `make psql` then
 | `make e2e` | Comprehensive backend e2e against the running stack |
 | `make lint` / `make fmt` / `make test` | Deno lint / format / DB-backed tests |
 
-## LLM: mock vs real
-`.env.local` controls the LLM. By default it points `OPENROUTER_BASE` at the local mock (fully
-offline, deterministic). To use the real model, set a real `OPENROUTER_API_KEY` and
-`OPENROUTER_BASE=https://openrouter.ai/api/v1` (and `OPENROUTER_MODEL`). Embeddings + platform
-OAuth/data stay mocked unless you also provide real Gemini / Meta / Google credentials.
+## LLM + embeddings: mock / local / cloud
+`.env.local` selects the provider by env only — no code change (`shared/llm.ts`, `shared/embeddings.ts`):
+
+- **Mock (default)** — `OPENROUTER_BASE` + `VERTEX_EMBEDDINGS_URL` point at the mock; fully offline,
+  deterministic.
+- **Local real models** — point both at an **OpenAI-compatible server** (e.g. LM Studio at
+  `http://host.docker.internal:1234/v1`): set `OPENROUTER_BASE` + `OPENROUTER_MODEL`,
+  `LLM_RESPONSE_FORMAT=none` (LM Studio rejects `json_object`; JSON is steered by prompt + robust
+  extraction), and `EMBEDDINGS_PROVIDER=openai` + `EMBEDDINGS_BASE` + `EMBEDDINGS_MODEL`
+  (EmbeddingGemma is 768-dim, matching `vector(768)`). LM Studio must **serve on the local network**
+  (not just 127.0.0.1) so the edge-runtime container can reach `host.docker.internal`. No key needed.
+  Reasoning models (e.g. gemma-4) are slower per comment — fine for validation; keep batches small.
+- **Cloud** — real `OPENROUTER_API_KEY` + `OPENROUTER_BASE=https://openrouter.ai/api/v1`, and Vertex
+  embeddings via a service account (`EMBEDDINGS_PROVIDER=vertex`, `VERTEX_SA_*`, asia-south1 URL).
+
+Platform OAuth/data (Instagram/YouTube) stay mocked via Nango's `providers.yaml` unless you wire real
+Meta/Google credentials into Nango. See `.env.local.example` for the full annotated matrix.
 
 ## How it bootstraps (notes & gotchas)
 - **`db`** uses the `supabase/postgres` image. A one-time init script

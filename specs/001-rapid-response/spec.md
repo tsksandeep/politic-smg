@@ -226,5 +226,28 @@ the change is reflected for other analysts on the board.
   out of scope.
 - **Prerequisite for demo**: Story 1 can be validated with a small set of manually pre-connected
   accounts before Story 2 (self-service onboarding) is complete.
-- **Out of scope for this phase**: performance analytics (best/worst content, unique engaged
-  audience, cadre-overlap maps) and message-discipline flagging — later phases.
+- **Out of scope for this phase**: the *heavy* performance analytics (best/worst content, unique
+  engaged audience, cadre-overlap maps) and message-discipline flagging — later phases. A light
+  favourable-narrative + cadre-coverage slice was delivered (see "Delivered beyond the core
+  wedge" below); the heavier analytics remain out of scope.
+
+## Delivered beyond the core wedge
+
+The implementation ships a small, low-cost slice of Phase-2 performance analytics on the **same
+consented dataset**, with **no new write paths and no citizen-identifying data** (so it stays
+inside the constitution). It is documented here to keep spec, data-model, and code in step; it
+does not change any FR or SC above.
+
+- **DR-1 — Favourable (pro-party) narratives**: positive comment clusters are tracked as
+  `narrative.stance = pro_party` and ranked by a `performance_score` (volume × growth) on a
+  `narrative_board` view. These **never raise alerts** (alerting stays anti-party only, FR-005);
+  they give the war room a "what's landing well" counterpart to the threat board.
+- **DR-2 — Cadre coverage**: a `cadre_coverage` view aggregates positive/negative/neutral comment
+  counts per cadre, surfaced as a coverage chart on the board.
+- **DR-3 — Anonymized drill-downs**: cadre- and narrative-detail pages with example comments,
+  served from `cadre_narrative` / `cadre_comment` views. Commenter identity is **never** exposed
+  (FR-008 still holds).
+
+**New entity field**: `Narrative.stance` (`anti_party` | `pro_party`) distinguishes threat
+clusters from favourable ones. All probabilistic values on these views remain confidence-labeled
+(FR-004 / Principle V).

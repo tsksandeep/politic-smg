@@ -6,9 +6,10 @@ during product definition. No unresolved `NEEDS CLARIFICATION` remain.
 ## R1. Instagram ingestion path
 
 - **Decision**: Ingest only **Business/Creator** accounts via the **Instagram Graph API** using
-  per-cadre OAuth (Facebook Login). Receive new comments via **Graph API webhooks** (comments,
-  mentions) rather than polling. Store long-lived tokens encrypted in Supabase Vault; refresh
-  on the ~60-day lifecycle via a `pg_cron` job.
+  per-cadre OAuth, brokered by a self-hosted **Nango** instance (see R9). Receive new comments
+  via **Graph API webhooks** (comments, mentions) rather than polling. Nango holds the long-lived
+  tokens (encrypted at rest) and auto-refreshes them on the ~60-day lifecycle; the app stores only
+  a Nango connection handle and never the token itself.
 - **Rationale**: The Instagram Basic Display API reached end-of-life (Dec 2024); personal
   accounts are no longer accessible to third-party apps. Webhooks give near-real-time comment
   delivery, which directly serves SC-001 (≤15 min) without burning rate limits on polling.
@@ -66,6 +67,12 @@ during product definition. No unresolved `NEEDS CLARIFICATION` remain.
   request log (supports the audit trail in constitution §Security). Two-tier routing controls
   cost at thousands of accounts × many comments. OpenRouter is completion-focused, so embeddings
   use the provider endpoint directly.
+- **Interface (provider-agnostic)**: both layers speak an OpenAI-compatible shape and select the
+  provider by env, so the same code runs against hosted OpenRouter + Vertex (cloud), or a fully
+  **local** OpenAI-compatible server (e.g. LM Studio: gemma-4 chat + EmbeddingGemma 768-dim) for
+  offline dev. `LLM_RESPONSE_FORMAT` toggles native JSON mode vs prompt-steered JSON for servers
+  that don't support `json_object`; `EMBEDDINGS_PROVIDER` switches `vertex` ↔ `openai`. Embedding
+  dimensionality MUST stay 768 to match `vector(768)` (migration 0002).
 - **Alternatives rejected**: on-platform inference (no longer relevant once host is Supabase);
   single-tier (cost); using OpenRouter for embeddings (limited/unsupported).
 
@@ -104,11 +111,30 @@ during product definition. No unresolved `NEEDS CLARIFICATION` remain.
 - **Alternatives rejected**: polling the board (latency, load); app-layer-only authz (weaker
   than DB-enforced RLS).
 
+## R9. OAuth brokering & token lifecycle (supersedes the in-app Vault token store)
+
+- **Decision**: Broker all cadre OAuth (Instagram via Facebook Login, YouTube via Google) through
+  a **self-hosted Nango instance**, pinned to an India region and deployed per tenant. Nango owns
+  token storage (encrypted at rest) and **auto-refreshes** tokens on read, so the app holds only a
+  `nango_connection_id` per account — never a token. Consent uses Nango Connect sessions:
+  `oauth-start` opens a session, the SPA runs the Nango frontend SDK, and `oauth-callback` records
+  the resulting connection. Revocation deletes the Nango connection and triggers the data purge.
+- **Rationale**: This removes the bespoke Supabase Vault token store and the `pg_cron` token-refresh
+  job (a moving part we no longer maintain), and it deepens Principle III minimization — the app's
+  database never contains a usable credential. Nango centralizes provider config, refresh, and the
+  ~60-day IG lifecycle (Principle VII). Supabase Vault is retained only for the internal
+  service-role key that pg_cron uses to invoke Edge Functions.
+- **Alternatives rejected**: in-app Vault token store + custom refresh cron (more code, more
+  failure surface, a usable token sitting in our DB); platform SDKs hand-rolled per provider
+  (duplicated refresh/expiry logic).
+- **Migration note**: implemented in `0016_nango.sql`, which drops the Vault token functions
+  (`store/read/rotate_account_token`) and the `token-refresh` cron introduced in 0008/0011.
+
 ## Resolved unknowns summary
 
 | Topic | Resolution |
 |-------|------------|
-| IG access | Graph API, Creator/Business, webhooks, OAuth |
+| IG access | Graph API, Creator/Business, webhooks, OAuth (brokered by Nango) |
 | YT access + quota | Data API v3, uploads-playlist reads, **audit = release precondition** |
 | Host | Supabase single project, India region |
 | Ingestion compute | pg_cron micro-batch + pgmq; Render worker deferred |
@@ -116,3 +142,4 @@ during product definition. No unresolved `NEEDS CLARIFICATION` remain.
 | Detection | pgvector clustering + volume/growth thresholds + coordination + confidence |
 | Privacy | hashed IDs, 30-day raw purge, India residency |
 | Realtime + authz | Supabase Realtime + RLS (Admin/Analyst) |
+| OAuth + tokens | Self-hosted Nango brokers consent + owns token storage/auto-refresh (R9); app keeps only a connection handle |

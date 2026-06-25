@@ -34,11 +34,15 @@ A consented IG (Creator/Business) or YouTube account — the **only** ingestion 
 | consent_status | enum(connected, revoked) | revocation triggers purge |
 | connected_at | timestamptz | |
 | revoked_at | timestamptz null | |
-| token_ref | text | reference to secret in Supabase Vault (never the token itself) |
-| token_expires_at | timestamptz | drives `token-refresh` job |
+| nango_connection_id | text | handle for the cadre's connection in Nango (tokens live in Nango, not here) |
+| provider_config_key | text | Nango integration key (`instagram` / `youtube`) |
+| token_ref | text null | legacy Vault reference; nullable + unused since the Nango migration (0016) |
+| token_expires_at | timestamptz null | informational only; Nango auto-refreshes on read (no app-side job) |
 | backfill_done | bool | 30-day backfill completed flag |
 - Rules: FR-001/010/010a/011. Only `consent_status = connected` accounts are ingested.
-  On revoke → stop ingestion immediately, schedule purge.
+  On revoke → stop ingestion immediately, delete the Nango connection, schedule purge.
+- Tokens: never stored on this row. Nango owns storage + auto-refresh; the app reads a fresh
+  access token from Nango per call via the `nango_connection_id` (Principle III minimization, R9).
 
 ### post
 Content published by a connected account; the unit comments attach to.
@@ -81,9 +85,11 @@ A clustered hostile/anti-party theme detected across comments.
 | growth_rate | real | rate of change |
 | confidence | real | 0–1 (FR-004) |
 | coordination_score | real | 0–1 coordination signal (FR-003) |
+| stance | enum(anti_party, pro_party) | default `anti_party`; pro_party clusters power the favourable view (delivered scope, see below) |
 | first_seen_at | timestamptz | |
 | last_updated_at | timestamptz | |
-- Rules: FR-002/003/004; hostile-only (positive surges excluded, FR-005).
+- Rules: FR-002/003/004. Only `anti_party` narratives raise alerts (positive surges excluded from
+  alerting, FR-005); `pro_party` narratives are tracked for the favourable view but never alert.
 
 ### alert
 A surfaced narrative event for the war room.
@@ -98,7 +104,8 @@ A surfaced narrative event for the war room.
 | closed_at | timestamptz null | |
 | response_note | text null | logged counter-response (FR-013) |
 | affected_scope | jsonb | affected cadres/posts summary |
-- Derived: `response_latency = closed_at − detected_at` (FR-014, SC-006).
+| response_latency | interval (generated) | stored generated column `closed_at − detected_at` (FR-014, SC-006) |
+- Derived: `response_latency` is a generated column, not computed in the app.
 - State transitions: `open → acknowledged → closed` (FR-013); live via Realtime (FR-006).
 
 ### app_user
@@ -125,8 +132,24 @@ Global, Admin-tunable thresholds (singleton-ish, one active row).
 
 ### Supporting (operational, not domain)
 - **pgmq queues**: `ingest_jobs`, `analyze_jobs` (+ DLQs) — R4.
-- **pg_cron jobs**: `ingest-youtube`, `token-refresh`, `retention-purge`, `detect-narratives`.
+- **pg_cron jobs**: `analyze-comments`, `detect-narratives`, `ingest-youtube`, `retention-purge`.
+  (No `token-refresh` job — Nango auto-refreshes tokens; R9.)
 - **Storage bucket**: `raw-payloads` — archived API responses (also under retention).
+- **app_config**: service-role-only key/value (e.g. local Nango secret); not domain data.
+
+## Delivered views beyond the core wedge (Phase-2 analytics slice)
+
+These ship alongside the rapid-response wedge and are derived (read-only, RLS via
+`security_invoker`) — no new write paths. They are an early slice of Phase-2 performance
+analytics, documented here so the schema and code stay in step.
+
+- **`alert_board`**: open/acknowledged anti-party alerts ⋈ narrative, with `data_fresh_as_of`
+  (FR-015). The primary war-room surface (US1).
+- **`narrative_board`**: all narratives (both stances) with `performance_score = volume ×
+  max(growth_rate, 0)` — powers the favourable (pro-party) ranking.
+- **`cadre_coverage`**: per-cadre positive / negative / neutral / total comment counts.
+- **`cadre_narrative`**, **`cadre_comment`**: anonymized drill-downs for the cadre and narrative
+  detail pages (no `commenter_hash` exposed — Principle III).
 
 ## Entity relationships
 

@@ -98,7 +98,7 @@ ingestion, and serving — which collapses cleanly onto a single Postgres.
    Cadre OAuth consent   │              SUPABASE (single tenant)          │
    (IG Creator / YT) ───▶│                                                │
                          │  ┌── Onboarding Edge Fn ─┐                     │
-   IG comment webhooks ─▶│  │  OAuth, token vault   │                     │
+   IG comment webhooks ─▶│  │  OAuth via Nango      │                     │
    YT polling (pg_cron) ▶│  └────────────┬──────────┘                     │
                          │               ▼                                │
                          │   pgmq queue ──▶ Ingest Edge Fns (micro-batch) │
@@ -141,7 +141,8 @@ ingestion, and serving — which collapses cleanly onto a single Postgres.
 | Ingestion pipeline decoupling | **pgmq** | Postgres-native queue: fetch → normalize → analyze → persist, with retries/DLQ |
 | Scheduled YT polling + token refresh | **pg_cron** | Triggers micro-batch Edge Functions; backoff to respect quota |
 | Compute (OAuth flows, ingest workers, API) | **Edge Functions** (Deno) | One function per bounded responsibility; webhooks land here |
-| Config / encrypted token vault | **Vault** (+ Postgres) | OAuth client secrets in Vault; per-cadre tokens encrypted at rest |
+| Cadre OAuth + token storage/refresh | **Nango** (self-hosted, per-tenant) | Brokers IG/YT consent; stores + auto-refreshes per-cadre tokens; the app keeps only a connection handle |
+| Internal secrets (service-role key for cron) | **Vault** (+ Postgres) | Cadre OAuth *client* secrets live inside Nango, not the app |
 | LLM inference | **OpenRouter → Gemini 2.5 Flash** | External API; see §7 |
 
 ### Scaling note (compute, not storage)
@@ -178,9 +179,10 @@ on-message classifier retrieve from it via hybrid SQL + vector queries.
 
 ## 8. Security & compliance (DPDP posture: minimize & anonymize)
 
-- **Cadre data:** lawful basis = explicit OAuth consent. Tokens in **Supabase Vault**,
-  encrypted at rest; auto-refresh (IG long-lived tokens ~60-day lifecycle); revocation
-  fully honored.
+- **Cadre data:** lawful basis = explicit OAuth consent. Per-cadre tokens are held and
+  auto-refreshed by **Nango** (self-hosted, India region), encrypted at rest; the app stores
+  only a connection handle, never a token (IG long-lived ~60-day lifecycle handled by Nango);
+  revocation fully honored (Nango connection deleted + data purged).
 - **Commenter data:** analyzed in **aggregate**; commenter usernames **hashed** internally;
   troll detection works on *patterns* (hashed IDs, timing bursts, text similarity), not
   identities. **Short retention with auto-deletion** (pg_cron purge jobs); raw comment text
@@ -245,4 +247,8 @@ This project is built with [GitHub Spec Kit](https://github.com/github/spec-kit)
   `backend/supabase/seed/demo_burst.sql`)
 - **Release gates:** [`docs/quota-audit.md`](docs/quota-audit.md) (YouTube quota), `docs/compliance.md` (DPDP/residency, pending)
 
-Status: Setup + Foundational + US1 (the wedge MVP) implemented; US2/US3/Polish pending.
+Status: Setup, Foundational, **US1 (the wedge MVP), US2 (consent onboarding via Nango), US3
+(triage), and Polish are all implemented and locally validated.** A favourable-narrative +
+cadre-coverage view (an early slice of Phase 2 analytics) ships alongside the wedge. The only
+open item is the external **YouTube Data API quota audit** (Principle VII); until it is approved
+the YouTube path stays code-gated (`YT_INGEST_ENABLED`) and the product runs **Instagram-first**.

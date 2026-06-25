@@ -7,16 +7,20 @@ A validation/run guide proving the wedge works end-to-end. Implementation detail
 
 - A Supabase project pinned to an **India region** (single tenant), with extensions enabled:
   `pgvector`, `pgmq`, `pg_cron`.
-- Secrets configured: OpenRouter API key; Gemini embedding API key; Instagram (Facebook Login)
-  app credentials; YouTube Data API credentials. Stored in Supabase Vault — never in code.
+- Secrets configured (see `docs/secrets.md`): OpenRouter API key; Vertex AI embedding service
+  account; `NANGO_HOST` + `NANGO_SECRET_KEY`; Instagram webhook secret. Platform OAuth *client*
+  credentials live inside **Nango**; the service-role key (for cron) lives in Supabase Vault.
+  Never in code.
 - For YouTube: an **approved quota-increase audit** (or run Instagram-first; see research.md R2).
 - Frontend env pointed at the Supabase project URL + anon key.
 
 ## Setup (high level)
 
 1. Apply migrations (schema + pgvector + RLS + pgmq queues + pg_cron jobs) — see `data-model.md`.
-2. Deploy Edge Functions (`oauth-start`, `oauth-callback`, `ig-webhook`, `ingest-youtube`,
-   `analyze-comments`, `detect-narratives`, `token-refresh`, `retention-purge`).
+2. Deploy Edge Functions (`oauth-start`, `oauth-callback`, `backfill`, `accounts`,
+   `account-revoke`, `ig-webhook`, `ingest-youtube`, `analyze-comments`, `detect-narratives`,
+   `detection-settings`, `alert-detail`, `alert-triage`, `retention-purge`). No `token-refresh`
+   function — Nango auto-refreshes tokens.
 3. Register the Instagram webhook subscription for the app.
 4. Create one Admin user (Supabase Auth) and assign `role = admin`.
 5. Serve the frontend dashboard.

@@ -1,7 +1,9 @@
 # Secrets & Credentials (T005)
 
-All secrets live in **Supabase Vault** (or Edge Function secrets) — never in code or git.
-The frontend uses only the public anon key; the service-role key is backend-only.
+No secret lives in code or git. Secrets have three homes: most are **Edge Function secrets**
+(env); per-cadre OAuth tokens + platform OAuth *client* creds live in **Nango**; and the
+service-role key used by pg_cron lives in **Supabase Vault**. The frontend uses only the public
+anon key; the service-role key is backend-only.
 
 | Secret | Used by | Notes |
 |---|---|---|

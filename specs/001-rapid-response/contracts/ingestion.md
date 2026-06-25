@@ -32,8 +32,10 @@ Internal interfaces — not exposed to dashboard users. Implements FR-001/002/00
   surges (FR-005, edge case "healthy spike"). On revoked-account data drop, recompute affected
   narratives (edge case "consent revoked mid-incident").
 
-## token-refresh  (pg_cron)
-- Refresh Instagram long-lived tokens before the ~60-day expiry; update `token_expires_at`.
+## token refresh — delegated to Nango (no app job)
+- There is no `token-refresh` Edge Function or cron. Ingestion reads a fresh access token from
+  **Nango** per run via the account's `nango_connection_id`; Nango handles the ~60-day IG
+  lifecycle and refresh on read (R9).
 
 ## retention-purge  (pg_cron)
 - Daily: null/delete `comment.body` and `raw-payloads` objects older than 30 days; purge data for

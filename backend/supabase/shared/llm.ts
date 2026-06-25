@@ -1,13 +1,20 @@
-// shared/llm.ts (T014) — OpenRouter → Gemini client with two-tier routing (R5).
+// shared/llm.ts (T014) — OpenAI-compatible chat client with two-tier routing (R5).
 //   Tier "bulk"    → gemini-2.5-flash-lite  (per-comment sentiment/language/troll features)
 //   Tier "nuanced" → gemini-2.5-flash       (theme synthesis, coordination judgment, summaries)
 // Escalate ambiguous bulk cases to nuanced. All callers must keep outputs labeled with
 // confidence (Principle V) — see shared/labels.ts.
+//
+// Provider is OpenAI-compatible and selected purely by env (prod cloud now / later, local now):
+//   • OPENROUTER_BASE → hosted OpenRouter (default) or a local server (e.g. LM Studio at
+//     http://host.docker.internal:1234/v1). A key is required only for hosted OpenRouter.
+//   • LLM_RESPONSE_FORMAT → "json_object" (OpenRouter/Gemini default) or "none" for local servers
+//     that reject json_object (LM Studio) — JSON is then steered by prompt + robust extraction.
 
 import { ENDPOINTS } from "./endpoints.ts";
 
 const OPENROUTER_URL = `${ENDPOINTS.openRouter}/chat/completions`;
-const API_KEY = Deno.env.get("OPENROUTER_API_KEY");
+const API_KEY = Deno.env.get("OPENROUTER_API_KEY") ?? "";
+const JSON_MODE = Deno.env.get("LLM_RESPONSE_FORMAT") ?? "json_object";
 
 export type Tier = "bulk" | "nuanced";
 
@@ -29,26 +36,37 @@ export interface ChatOptions {
 }
 
 export async function chat(prompt: string, opts: ChatOptions): Promise<string> {
-  if (!API_KEY) throw new Error("OPENROUTER_API_KEY is not set");
+  // A key is required only for hosted OpenRouter; local OpenAI-compatible servers need none.
+  if (!API_KEY && OPENROUTER_URL.includes("openrouter.ai")) {
+    throw new Error("OPENROUTER_API_KEY is not set");
+  }
+  const nativeJson = !!opts.json && JSON_MODE === "json_object";
+  // When the provider can't enforce JSON natively, steer it by instruction and extract robustly.
+  const system = [
+    opts.system ?? "",
+    opts.json && !nativeJson
+      ? "Respond with ONLY a single JSON object — no prose, no markdown."
+      : "",
+  ].filter(Boolean).join("\n\n");
   const messages = [
-    ...(opts.system ? [{ role: "system", content: opts.system }] : []),
+    ...(system ? [{ role: "system", content: system }] : []),
     { role: "user", content: prompt },
   ];
   const res = await fetch(OPENROUTER_URL, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${API_KEY}`,
       "Content-Type": "application/json",
+      ...(API_KEY ? { "Authorization": `Bearer ${API_KEY}` } : {}),
     },
     body: JSON.stringify({
       model: MODEL[opts.tier],
       messages,
       temperature: opts.temperature ?? 0.2,
-      ...(opts.json ? { response_format: { type: "json_object" } } : {}),
+      ...(nativeJson ? { response_format: { type: "json_object" } } : {}),
     }),
   });
   if (!res.ok) {
-    throw new Error(`OpenRouter ${opts.tier} error ${res.status}: ${await res.text()}`);
+    throw new Error(`LLM ${opts.tier} error ${res.status}: ${await res.text()}`);
   }
   const data = await res.json();
   return data.choices?.[0]?.message?.content ?? "";
@@ -57,5 +75,17 @@ export async function chat(prompt: string, opts: ChatOptions): Promise<string> {
 /** Convenience: chat that parses a JSON object response. */
 export async function chatJSON<T>(prompt: string, opts: ChatOptions): Promise<T> {
   const raw = await chat(prompt, { ...opts, json: true });
-  return JSON.parse(raw) as T;
+  return parseJsonObject(raw) as T;
+}
+
+// Pull a JSON object out of a model reply: strips ```json fences and any reasoning-model preamble
+// by slicing to the outermost braces. Tolerates providers that don't honor a strict JSON mode.
+function parseJsonObject(raw: string): unknown {
+  let s = raw.trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) s = fence[1].trim();
+  const start = s.indexOf("{");
+  const end = s.lastIndexOf("}");
+  if (start >= 0 && end > start) s = s.slice(start, end + 1);
+  return JSON.parse(s);
 }
