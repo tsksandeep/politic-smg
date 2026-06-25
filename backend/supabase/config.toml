@@ -46,7 +46,10 @@ jwt_expiry = 3600
 enable_signup = false
 
 [auth.email]
-enable_signup = false
+# The email provider MUST be enabled — magic-link (OTP) is the only sign-in method. Invite-only
+# is still enforced by [auth].enable_signup = false above: provisioned users get a login link;
+# unknown emails are rejected (the SPA also passes shouldCreateUser: false).
+enable_signup = true
 enable_confirmations = false
 
 [edge_runtime]

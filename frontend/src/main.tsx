@@ -10,13 +10,39 @@ import "./index.css";
 // RequireAuth also pulls in the Supabase client, so it is lazy-loaded too.
 const Board = lazy(() => import("./pages/Board"));
 const AlertDetail = lazy(() => import("./pages/AlertDetail"));
+const NarrativeDetail = lazy(() => import("./pages/NarrativeDetail"));
+const CadreDetail = lazy(() => import("./pages/CadreDetail"));
 const Onboarding = lazy(() => import("./pages/Onboarding"));
 const RequireAuth = lazy(() => import("./components/RequireAuth"));
+
+// Branded dark splash for lazy-chunk / session-check loading (no white flash).
+function Splash() {
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "grid",
+        placeItems: "center",
+        background: "#05070d",
+        color: "rgba(255,255,255,0.55)",
+      }}
+    >
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontFamily: "'Clash Display', ui-sans-serif, system-ui, sans-serif", fontSize: 22, fontWeight: 600, color: "#fff", letterSpacing: "-0.02em" }}>
+          Politic
+        </div>
+        <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", marginTop: 8 }}>
+          Establishing secure session…
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // Wrap a protected element in the auth guard + lazy Suspense boundary.
 function Protected({ children }: { children: React.ReactNode }) {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<Splash />}>
       <RequireAuth>{children}</RequireAuth>
     </Suspense>
   );
@@ -28,6 +54,8 @@ function Shell() {
       <Route path="/" element={<Landing />} />
       <Route path="/board" element={<Protected><Board /></Protected>} />
       <Route path="/alerts/:id" element={<Protected><AlertDetail /></Protected>} />
+      <Route path="/narratives/:id" element={<Protected><NarrativeDetail /></Protected>} />
+      <Route path="/cadres/:id" element={<Protected><CadreDetail /></Protected>} />
       <Route path="/onboarding" element={<Protected><Onboarding /></Protected>} />
     </Routes>
   );

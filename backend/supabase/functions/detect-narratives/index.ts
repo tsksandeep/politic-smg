@@ -20,10 +20,10 @@ Deno.serve(async () => {
     return jsonResponse({ error: error.message }, 500);
   }
 
-  // Summarize narratives that have activity but no theme yet.
+  // Summarize narratives that have activity but no theme yet (anti-party AND favourable).
   const { data: narratives } = await db
     .from("narrative")
-    .select("id")
+    .select("id, stance")
     .is("theme_summary", null)
     .gt("volume", 0)
     .limit(20);
@@ -38,11 +38,15 @@ Deno.serve(async () => {
       .limit(8);
     const sample = (examples ?? []).map((e) => `- ${e.body}`).join("\n");
     if (!sample) continue;
+    const favourable = n.stance === "pro_party";
+    const prompt = favourable
+      ? `These are supportive/positive comments on our posts. In one short sentence, name the favourable theme (what the public is praising):\n${sample}`
+      : `These are anti-party comments on our posts. In one short sentence, name the narrative theme:\n${sample}`;
+    const system = favourable
+      ? "Summarize the shared praise/support in <=15 words."
+      : "Summarize the shared grievance/attack in <=15 words.";
     try {
-      const summary = await chat(
-        `These are anti-party comments on our posts. In one short sentence, name the narrative theme:\n${sample}`,
-        { tier: "nuanced", system: "Summarize the shared grievance/attack in <=15 words." },
-      );
+      const summary = await chat(prompt, { tier: "nuanced", system });
       await db.from("narrative").update({ theme_summary: summary.trim() }).eq("id", n.id);
       summarized++;
     } catch (e) {

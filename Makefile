@@ -48,9 +48,8 @@ migrate: ## Apply new migrations to the running local db
 reset: ## Recreate the local db and re-apply ALL migrations
 	$(SUPABASE) db reset
 
-seed: ## Load the synthetic hostile-burst demo and run detection (no external APIs)
-	psql "$(DB_URL)" -f backend/supabase/seed/demo_burst.sql
-	psql "$(DB_URL)" -c "select run_detection();"
+seed: ## Load the two-sided board demo (favourable + anti-party + cadre coverage), no external APIs
+	psql "$(DB_URL)" -f backend/supabase/seed/board_demo.sql
 
 demo: seed ## Alias for seed — lights up the war-room board end-to-end
 	@echo "✓ Demo burst seeded + detection run. Open http://localhost:5173/board"

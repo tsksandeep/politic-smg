@@ -11,9 +11,13 @@ const API_KEY = Deno.env.get("OPENROUTER_API_KEY");
 
 export type Tier = "bulk" | "nuanced";
 
+// Models are env-overridable (defaults preserve the two-tier production routing). A single
+// OPENROUTER_MODEL overrides both tiers; per-tier vars take precedence if set.
 const MODEL: Record<Tier, string> = {
-  bulk: "google/gemini-2.5-flash-lite",
-  nuanced: "google/gemini-2.5-flash",
+  bulk: Deno.env.get("OPENROUTER_MODEL_BULK") ?? Deno.env.get("OPENROUTER_MODEL") ??
+    "google/gemini-2.5-flash-lite",
+  nuanced: Deno.env.get("OPENROUTER_MODEL_NUANCED") ?? Deno.env.get("OPENROUTER_MODEL") ??
+    "google/gemini-2.5-flash",
 };
 
 export interface ChatOptions {

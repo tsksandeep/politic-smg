@@ -1,5 +1,6 @@
 html, body { margin: 0; padding: 0; }
-body { font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif; background: #FFFFFF; -webkit-font-smoothing: antialiased; }
+/* Dark base so dashboard routes never flash white; the Landing hero paints its own white frame. */
+body { font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif; background: #05070d; color: #fff; -webkit-font-smoothing: antialiased; }
 * { box-sizing: border-box; }
 #root { min-height: 100vh; }
 
@@ -52,4 +53,116 @@ body { font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif; background:
   .rv, .hero-stage .rv, .hero-stage.is-in .rv { opacity: 1 !important; transform: none !important; transition: none !important; }
   .signin-btn .arrow-circle { transition: none !important; }
   .hud-scan, .ember-glow { animation: none !important; }
+}
+
+/* =====================================================================
+   App (dashboard) shell — shared dark "ops-console" theme.
+   Used by Board / AlertDetail / Onboarding via <AppShell>. Tokens live in theme.ts.
+   ===================================================================== */
+.app-shell {
+  position: relative;
+  min-height: 100vh;
+  color: #fff;
+  font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
+  background:
+    radial-gradient(120% 75% at 12% -10%, rgba(255,90,54,0.10), rgba(255,90,54,0) 58%),
+    radial-gradient(110% 110% at 100% 0%, rgba(20,27,51,0.65), rgba(5,7,13,0) 55%),
+    #05070d;
+}
+.app-grain { position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: 0.045; }
+.app-content { position: relative; z-index: 1; }
+
+/* Glass panels / cards */
+.panel {
+  background: rgba(20,27,51,0.45);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 18px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.card-link {
+  display: block; text-decoration: none; color: inherit;
+  transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+}
+.card-link:hover { transform: translateY(-2px); border-color: rgba(255,90,54,0.45); box-shadow: 0 16px 44px rgba(0,0,0,0.45); }
+.card-link:focus-visible { outline: 2px solid #FF5A36; outline-offset: 3px; }
+
+/* Buttons */
+.btn {
+  font-family: inherit; font-size: 14px; font-weight: 600; line-height: 1;
+  border-radius: 9999px; padding: 11px 20px; min-height: 42px; border: 1px solid transparent;
+  cursor: pointer; transition: background .18s, border-color .18s, color .18s, opacity .18s;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.btn:disabled { opacity: .38; cursor: not-allowed; }
+.btn:focus-visible { outline: 2px solid #FF5A36; outline-offset: 2px; }
+.btn-primary { background: #D6492E; color: #fff; }
+.btn-primary:hover:not(:disabled) { background: #E5552F; }
+.btn-ghost { background: rgba(255,255,255,0.06); color: #fff; border-color: rgba(255,255,255,0.18); }
+.btn-ghost:hover:not(:disabled) { background: rgba(255,255,255,0.12); }
+
+/* Inputs / textareas */
+.field {
+  width: 100%; background: rgba(5,7,13,0.55); color: #fff; font-family: inherit; font-size: 14px;
+  border: 1px solid rgba(255,255,255,0.14); border-radius: 12px; padding: 12px 14px; resize: vertical;
+  transition: border-color .15s ease;
+}
+.field::placeholder { color: rgba(255,255,255,0.38); }
+.field:focus { outline: none; border-color: #D6492E; }
+
+/* Monospace back / nav links */
+.backlink {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px; letter-spacing: 0.04em; color: rgba(255,255,255,0.55);
+  text-decoration: none; transition: color .15s ease;
+}
+.backlink:hover { color: #fff; }
+
+/* Confidence/coordination signal pill, coloured by band */
+.cbadge {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px; letter-spacing: 0.02em; padding: 3px 9px; border-radius: 9999px;
+  border: 1px solid; white-space: nowrap;
+}
+.cbadge[data-band="high"]     { color: #FFB7A6; border-color: rgba(255,90,54,0.50); background: rgba(255,90,54,0.12); }
+.cbadge[data-band="moderate"] { color: #F0C98A; border-color: rgba(224,162,60,0.45); background: rgba(224,162,60,0.10); }
+.cbadge[data-band="low"]      { color: rgba(255,255,255,0.6); border-color: rgba(255,255,255,0.18); background: rgba(255,255,255,0.05); }
+
+/* Live pulse dot */
+@keyframes pulse-dot { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.82); } }
+.live-dot { animation: pulse-dot 2.4s ease-in-out infinite; }
+
+/* Thin ember scan line under a section header */
+@keyframes scan-x { 0% { transform: translateX(-120%); } 100% { transform: translateX(360%); } }
+.scanline { position: relative; overflow: hidden; }
+.scanline::after {
+  content: ""; position: absolute; left: 0; bottom: -1px; height: 1px; width: 30%;
+  background: linear-gradient(90deg, transparent, #FF5A36, transparent); animation: scan-x 5s linear infinite;
+}
+
+/* Full-bleed layout: header + content span the viewport with responsive gutters */
+.app-header { padding: 18px clamp(20px, 3.5vw, 52px); }
+.app-main { padding: 30px clamp(20px, 3.5vw, 52px) 80px; }
+
+/* Board: responsive alert grid that fills the viewport width */
+.board-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(370px, 1fr)); gap: 16px; }
+@media (max-width: 480px) { .board-grid { grid-template-columns: 1fr; } }
+
+/* Alert detail: theme spans full width, then a meta/triage column + comments column */
+.detail-grid { display: grid; grid-template-columns: 1fr; gap: 24px; align-items: start; }
+@media (min-width: 1040px) { .detail-grid { grid-template-columns: minmax(0, 460px) minmax(0, 1fr); } }
+.detail-sticky { position: static; }
+@media (min-width: 1040px) { .detail-sticky { position: sticky; top: 24px; } }
+
+/* Onboarding: connect actions + connected list side by side on wide screens */
+.onboard-grid { display: grid; grid-template-columns: 1fr; gap: 22px; align-items: start; }
+@media (min-width: 900px) { .onboard-grid { grid-template-columns: minmax(0, 440px) minmax(0, 1fr); } }
+
+/* Generic even two-column split (favourable best/worst, cadre coverage) */
+.two-col { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
+@media (min-width: 880px) { .two-col { grid-template-columns: 1fr 1fr; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .card-link:hover { transform: none; }
+  .live-dot, .scanline::after { animation: none !important; }
 }

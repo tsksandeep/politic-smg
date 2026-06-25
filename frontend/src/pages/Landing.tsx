@@ -37,7 +37,9 @@ export default function Landing() {
       const { supabase } = await import("../services/supabase");
       const { error } = await supabase.auth.signInWithOtp({
         email: email.trim(),
-        options: { emailRedirectTo: `${window.location.origin}/board` },
+        // Invite-only: never create a user from the public page; only provisioned party
+        // users receive a login link (unknown emails are silently rejected server-side).
+        options: { emailRedirectTo: `${window.location.origin}/board`, shouldCreateUser: false },
       });
       setStatus(error ? "error" : "sent");
     } catch {
@@ -322,8 +324,8 @@ export default function Landing() {
               {status === "sending"
                 ? "Sending secure sign-in link…"
                 : status === "sent"
-                ? "Check your party inbox for a secure sign-in link."
-                : "Couldn't send the link. Check the address and try again."}
+                  ? "Check your party inbox for a secure sign-in link."
+                  : "Couldn't send the link. Check the address and try again."}
             </p>
           )}
         </nav>
@@ -333,13 +335,12 @@ export default function Landing() {
           style={{
             position: "absolute",
             left: 64,
-            top: 140,
+            top: 120,
             zIndex: 10,
             maxWidth: 540,
             width: "calc(100% - 128px)",
           }}
         >
-
           <h1
             className="rv rv-1"
             style={{
@@ -353,8 +354,8 @@ export default function Landing() {
               textShadow: "0 2px 40px rgba(0,0,0,0.55)",
             }}
           >
-            <span style={{ color: EMBER }}>Centralised</span> narrative efficiency tracking of
-            thousands of party cadres&rsquo; social media accounts.
+            <span style={{ color: EMBER }}>Centralised</span> narrative efficiency tracking of party
+            cadres&rsquo; social media accounts.
           </h1>
         </div>
 
