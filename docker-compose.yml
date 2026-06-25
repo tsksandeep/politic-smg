@@ -1,32 +1,244 @@
-# Local dev — frontend only.
+# Fully self-hosted local stack — one `docker compose up`, no Supabase CLI.
 #
-# The BACKEND (Postgres + Auth + Realtime + Storage + Studio + Edge Runtime) is run by the
-# Supabase CLI (`supabase start`), which manages its own Docker Compose stack — that is the
-# officially recommended approach and is not reinvented here. This file runs just the Vite
-# dev container; the browser talks to the Supabase API at http://localhost:54321 directly.
+# Brings up Postgres + Auth (GoTrue) + REST (PostgREST) + Realtime + Kong gateway + Edge Functions
+# (edge-runtime) + a one-shot migration runner, plus MailHog (email), the external-API mock, and
+# the Vite frontend. Image tags are pinned to the exact versions the Supabase CLI uses, so the
+# behaviour matches `supabase start`. The browser reaches everything via Kong at localhost:54321.
 #
-# Usage: `make up` (starts Supabase + functions + this web container). See docs/local-dev.md.
+# Quickstart: cp .env.local.example .env.local  &&  docker compose up   (then open :5173)
+# Mail UI :8025 · API gateway :54321 · Postgres :54322 · mock :9100
+#
+# Local-dev demo keys (NOT secrets — fixed Supabase local values, safe to commit):
+x-jwt-secret: &jwt-secret "super-secret-jwt-token-with-at-least-32-characters-long"
+x-anon-key: &anon-key "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
+x-service-key: &service-key "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
 
 services:
+  db:
+    image: public.ecr.aws/supabase/postgres:15.8.1.085
+    restart: unless-stopped
+    ports:
+      - "54322:5432"
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_HOST: /var/run/postgresql
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      # Bootstrap role passwords on fresh init. MUST sort AFTER the image's own init scripts
+      # (migrate.sh) which create the roles — hence the "zzz-" target name.
+      - ./backend/docker/db-init/99-init.sql:/docker-entrypoint-initdb.d/zzz-init.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  auth:
+    image: public.ecr.aws/supabase/gotrue:v2.178.0
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: "9999"
+      API_EXTERNAL_URL: http://127.0.0.1:54321
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgresql://supabase_auth_admin:postgres@db:5432/postgres
+      GOTRUE_SITE_URL: http://localhost:5173
+      GOTRUE_URI_ALLOW_LIST: http://localhost:5173,http://localhost:5173/board
+      GOTRUE_DISABLE_SIGNUP: "true"
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: "3600"
+      GOTRUE_JWT_SECRET: *jwt-secret
+      GOTRUE_JWT_ISSUER: http://127.0.0.1:54321/auth/v1
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_MAILER_URLPATHS_INVITE: http://127.0.0.1:54321/auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: http://127.0.0.1:54321/auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_RECOVERY: http://127.0.0.1:54321/auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: http://127.0.0.1:54321/auth/v1/verify
+      GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
+      GOTRUE_RATE_LIMIT_EMAIL_SENT: "360000"
+      # Email → MailHog (SMTP 1025).
+      GOTRUE_SMTP_HOST: mailhog
+      GOTRUE_SMTP_PORT: "1025"
+      GOTRUE_SMTP_ADMIN_EMAIL: admin@politic.test
+      GOTRUE_SMTP_SENDER_NAME: Politic War Room
+      GOTRUE_SMTP_MAX_FREQUENCY: "1s"
+
+  rest:
+    image: public.ecr.aws/supabase/postgrest:v13.0.4
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgresql://authenticator:postgres@db:5432/postgres
+      PGRST_DB_SCHEMAS: public,graphql_public
+      PGRST_DB_EXTRA_SEARCH_PATH: public,extensions
+      PGRST_DB_MAX_ROWS: "1000"
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: '{"keys":[{"kty":"oct","k":"c3VwZXItc2VjcmV0LWp3dC10b2tlbi13aXRoLWF0LWxlYXN0LTMyLWNoYXJhY3RlcnMtbG9uZw"}]}'
+
+  realtime:
+    image: public.ecr.aws/supabase/realtime:v2.43.0
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: "4000"
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: supabase_admin
+      DB_PASSWORD: postgres
+      DB_NAME: postgres
+      DB_AFTER_CONNECT_QUERY: "SET search_path TO _realtime"
+      DB_ENC_KEY: supabaserealtime
+      API_JWT_SECRET: *jwt-secret
+      METRICS_JWT_SECRET: *jwt-secret
+      SECRET_KEY_BASE: EAx3IQ/wRG1v47ZD4NE4/9RzBI8Jmil3x0yhcW4V2NHBP6c2iPIzwjofi2Ep4HIG
+      APP_NAME: realtime
+      ERL_AFLAGS: "-proto_dist inet_tcp"
+      DNS_NODES: "''"
+      RLIMIT_NOFILE: "10000"
+      SEED_SELF_HOST: "true"
+      RUN_JANITOR: "true"
+      MAX_HEADER_LENGTH: "4096"
+      MIX_ENV: prod
+      ECTO_IPV6: "true"
+
+  migrate:
+    image: public.ecr.aws/supabase/postgres:15.8.1.085
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SEED: "${SEED:-true}"
+    entrypoint: ["bash", "/migrate.sh"]
+    volumes:
+      - ./backend/docker/migrate.sh:/migrate.sh:ro
+      - ./backend/supabase/migrations:/migrations:ro
+      - ./backend/supabase/seed:/seed:ro
+    restart: "no"
+
+  functions:
+    image: public.ecr.aws/supabase/edge-runtime:v1.69.1
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    working_dir: /home/deno
+    entrypoint: ["edge-runtime"]
+    command: ["start", "--main-service=/home/deno/_main", "--port=8081", "--policy=oneshot"]
+    env_file:
+      - .env.local
+    environment:
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_ANON_KEY: *anon-key
+      SUPABASE_SERVICE_ROLE_KEY: *service-key
+      SUPABASE_DB_URL: postgresql://postgres:postgres@db:5432/postgres
+      SUPABASE_INTERNAL_JWT_SECRET: *jwt-secret
+      SUPABASE_INTERNAL_HOST_PORT: "54321"
+      SUPABASE_INTERNAL_FUNCTIONS_CONFIG: >-
+        {"account-revoke":{"verifyJWT":false,"entrypointPath":"supabase/functions/account-revoke/index.ts"},
+        "accounts":{"verifyJWT":false,"entrypointPath":"supabase/functions/accounts/index.ts"},
+        "alert-detail":{"verifyJWT":false,"entrypointPath":"supabase/functions/alert-detail/index.ts"},
+        "alert-triage":{"verifyJWT":false,"entrypointPath":"supabase/functions/alert-triage/index.ts"},
+        "analyze-comments":{"verifyJWT":false,"entrypointPath":"supabase/functions/analyze-comments/index.ts"},
+        "backfill":{"verifyJWT":false,"entrypointPath":"supabase/functions/backfill/index.ts"},
+        "detect-narratives":{"verifyJWT":false,"entrypointPath":"supabase/functions/detect-narratives/index.ts"},
+        "detection-settings":{"verifyJWT":false,"entrypointPath":"supabase/functions/detection-settings/index.ts"},
+        "ig-webhook":{"verifyJWT":false,"entrypointPath":"supabase/functions/ig-webhook/index.ts"},
+        "ingest-youtube":{"verifyJWT":false,"entrypointPath":"supabase/functions/ingest-youtube/index.ts"},
+        "oauth-callback":{"verifyJWT":false,"entrypointPath":"supabase/functions/oauth-callback/index.ts"},
+        "oauth-start":{"verifyJWT":false,"entrypointPath":"supabase/functions/oauth-start/index.ts"},
+        "retention-purge":{"verifyJWT":false,"entrypointPath":"supabase/functions/retention-purge/index.ts"},
+        "token-refresh":{"verifyJWT":false,"entrypointPath":"supabase/functions/token-refresh/index.ts"}}
+    volumes:
+      # Mount only functions/ + shared/ (NOT deno.lock/deno.json): the edge-runtime's Deno is older
+      # than the toolchain that wrote deno.lock (v5) and would fail to read it. No import map is
+      # needed (all imports are npm:/https:/relative).
+      - ./backend/supabase/functions:/home/deno/supabase/functions:ro
+      - ./backend/supabase/shared:/home/deno/supabase/shared:ro
+      - ./backend/docker/edge-main:/home/deno/_main:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  kong:
+    image: public.ecr.aws/supabase/kong:2.8.1
+    restart: unless-stopped
+    depends_on:
+      - auth
+      - rest
+      - realtime
+      - functions
+    ports:
+      - "54321:8000"
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /home/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_PLUGINS: request-transformer,cors
+      KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
+      KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+    volumes:
+      - ./backend/docker/kong.yml:/home/kong/kong.yml:ro
+
+  # One-shot: seed the Realtime tenant so websocket subscriptions work (FR-006 live board).
+  realtime-init:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      - realtime
+    entrypoint: ["sh", "/realtime-init.sh"]
+    volumes:
+      - ./backend/docker/realtime-init.sh:/realtime-init.sh:ro
+    restart: on-failure
+
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    restart: unless-stopped
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # web UI
+
+  mock:
+    image: denoland/deno:2.4.5
+    restart: unless-stopped
+    working_dir: /app
+    command: ["run", "--allow-net", "--allow-env", "mocks/server.ts"]
+    environment:
+      MOCK_PORT: "9100"
+    ports:
+      - "9100:9100"
+    volumes:
+      - ./backend/supabase:/app:ro
+
   web:
     build:
       context: ./frontend
       target: dev
+    restart: unless-stopped
+    depends_on:
+      kong:
+        condition: service_started
+      realtime-init:
+        condition: service_completed_successfully
     ports:
       - "5173:5173"
     environment:
-      # Local Supabase API + the well-known local anon key (printed by `supabase start`).
-      # These are NOT secrets — they are fixed local-dev demo credentials.
       VITE_SUPABASE_URL: "http://localhost:54321"
-      VITE_SUPABASE_ANON_KEY: "${SUPABASE_LOCAL_ANON_KEY}"
-      # Reliable file watching inside the container.
+      VITE_SUPABASE_ANON_KEY: "${SUPABASE_LOCAL_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0}"
       CHOKIDAR_USEPOLLING: "true"
     volumes:
-      # Bind the source for hot reload; anonymous volume shadows node_modules so the image's
-      # (correct-arch) deps are used instead of the host's.
       - ./frontend:/app
       - /app/node_modules
-    # Vite must reach the host's Supabase ports from the browser (localhost works); this lets
-    # the container itself resolve host services if ever needed.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+volumes:
+  db-data:

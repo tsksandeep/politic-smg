@@ -1,71 +1,71 @@
 # Politic-SMG — local dev orchestration.
-# Backend stack: Supabase CLI (manages its own Docker Compose). Frontend: docker compose (web).
-# See docs/local-dev.md. Run `make help` for targets.
+# The whole stack (Postgres, Auth+MailHog, REST, Realtime, Kong, Edge Functions, mock, web) runs
+# as ONE self-hosted Docker Compose stack — no Supabase CLI needed. See docs/local-dev.md.
 
-SUPABASE := cd backend && supabase
 DB_URL ?= postgresql://postgres:postgres@localhost:54322/postgres
+SUPABASE_URL ?= http://localhost:54321
+SERVICE_ROLE_KEY ?= eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
 
-.PHONY: help up down start stop env web web-logs functions functions-mock mock e2e migrate reset seed demo test fmt lint clean
+.PHONY: help up down restart logs ps reset seed mail psql user e2e fmt lint test clean
 
 help: ## List targets
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
-up: start env web ## Start everything (Supabase + web). Then run `make functions` in another shell.
+up: ## Start the whole stack (applies migrations + seeds + seeds realtime on first run)
+	@test -f .env.local || cp .env.local.example .env.local
+	docker compose up -d
 	@echo ""
-	@echo "✓ Supabase + web up. Studio: http://localhost:54323  ·  App: http://localhost:5173"
-	@echo "→ Now run 'make functions' in a separate terminal for hot-reloading Edge Functions."
+	@echo "✓ Stack up.  App: http://localhost:5173  ·  Mail: http://localhost:8025  ·  API: $(SUPABASE_URL)"
+	@echo "→ Create a war-room user: 'make user EMAIL=you@party.test', then sign in from the landing page."
 
-start: ## Start the Supabase stack (Postgres, Auth, Realtime, Storage, Studio, Edge Runtime)
-	$(SUPABASE) start
+down: ## Stop the stack (keeps data)
+	docker compose down
 
-stop: ## Stop the Supabase stack (keeps data)
-	$(SUPABASE) stop
+restart: ## Restart all services
+	docker compose restart
 
-env: ## Write root .env with the local anon key (for docker-compose web)
-	@$(SUPABASE) status -o env 2>/dev/null | sed -n 's/^ANON_KEY=/SUPABASE_LOCAL_ANON_KEY=/p' > .env
-	@echo "wrote .env (SUPABASE_LOCAL_ANON_KEY)"
+logs: ## Tail all logs (use `make logs SVC=functions` for one service)
+	docker compose logs -f $(SVC)
 
-web: ## Start the Vite frontend dev container (HMR)
-	docker compose up -d web
+ps: ## Show service status
+	docker compose ps
 
-web-logs: ## Tail the frontend container logs
-	docker compose logs -f web
+reset: ## Wipe data + recreate the whole stack from scratch (re-migrates + re-seeds)
+	docker compose down -v
+	docker compose up -d
 
-functions: ## Serve Edge Functions with hot reload (foreground). Needs .env.local (cp .env.local.example).
-	$(SUPABASE) functions serve --env-file ../.env.local --no-verify-jwt
+seed: ## Re-run the demo seed (only seeds a fresh DB; no-op if cadres already exist)
+	SEED=true docker compose run --rm migrate
 
-functions-mock: functions ## Alias: serve functions (with .env.local pointed at the mock APIs)
+mail: ## Open the MailHog inbox (captures magic-link emails)
+	@open http://localhost:8025 2>/dev/null || echo "MailHog UI: http://localhost:8025"
 
-mock: ## Run the mock external-API server (Meta/Google/OpenRouter/Gemini) on :9100 (foreground)
-	cd backend/supabase && deno run --allow-net --allow-env mocks/server.ts
+psql: ## Open a psql shell on the database
+	docker compose exec db psql "postgresql://postgres:postgres@localhost:5432/postgres"
 
-e2e: ## Full local end-to-end run against mocks (starts mock + functions, runs the test, tears down)
-	bash backend/supabase/mocks/e2e.sh
+EMAIL ?= warroom@politic.test
+user: ## Provision a war-room user (Admin). Usage: make user EMAIL=you@party.test
+	@curl -s -X POST "$(SUPABASE_URL)/auth/v1/admin/users" \
+	  -H "apikey: $(SERVICE_ROLE_KEY)" -H "Authorization: Bearer $(SERVICE_ROLE_KEY)" \
+	  -H "Content-Type: application/json" -d '{"email":"$(EMAIL)","email_confirm":true}' >/dev/null
+	@curl -s "$(SUPABASE_URL)/rest/v1/app_user?select=id" -H "apikey: $(SERVICE_ROLE_KEY)" -H "Authorization: Bearer $(SERVICE_ROLE_KEY)" >/dev/null
+	@echo "✓ user $(EMAIL) created. Promote to admin in psql if needed:"
+	@echo "  update app_user set role='admin' where id=(select id from auth.users where email='$(EMAIL)');"
 
-migrate: ## Apply new migrations to the running local db
-	$(SUPABASE) migration up
-
-reset: ## Recreate the local db and re-apply ALL migrations
-	$(SUPABASE) db reset
-
-seed: ## Load the two-sided board demo (favourable + anti-party + cadre coverage), no external APIs
-	psql "$(DB_URL)" -f backend/supabase/seed/board_demo.sql
-
-demo: seed ## Alias for seed — lights up the war-room board end-to-end
-	@echo "✓ Demo burst seeded + detection run. Open http://localhost:5173/board"
-
-test: ## Run the DB-backed Deno tests against the local stack
-	cd backend/supabase && DATABASE_URL="$(DB_URL)" deno test --allow-env --allow-net --allow-read tests/
+e2e: ## Run the comprehensive backend e2e against the running stack (uses the real LLM if .env.local has a key)
+	cd backend/supabase && \
+	  FUNCTIONS_URL="$(SUPABASE_URL)/functions/v1" SUPABASE_URL="$(SUPABASE_URL)" \
+	  SERVICE_ROLE_KEY="$(SERVICE_ROLE_KEY)" IG_APP_SECRET="mock-ig-secret" \
+	  deno test --allow-env --allow-net --allow-read tests/e2e_local_test.ts
 
 fmt: ## Format Edge Function / shared / test code
-	cd backend/supabase && deno fmt functions/ shared/ tests/
+	cd backend/supabase && deno fmt functions/ shared/ tests/ mocks/
 
 lint: ## Lint Edge Function / shared / test code
-	cd backend/supabase && deno lint functions/ shared/ tests/
+	cd backend/supabase && deno lint functions/ shared/ tests/ mocks/
 
-down: ## Stop web + Supabase
-	-docker compose down
-	-$(SUPABASE) stop
+test: ## Run DB-backed Deno tests against the stack
+	cd backend/supabase && DATABASE_URL="$(DB_URL)" deno test --allow-env --allow-net --allow-read tests/
 
-clean: down ## Stop everything and reset local Supabase data
-	$(SUPABASE) stop --no-backup
+clean: ## Stop everything and wipe all data + volumes
+	docker compose down -v --remove-orphans
