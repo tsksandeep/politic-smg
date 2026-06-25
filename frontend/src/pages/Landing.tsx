@@ -90,7 +90,6 @@ export default function Landing() {
           background: "#05070d",
           borderRadius: 28,
           border: "1px solid rgba(0,0,0,0.05)",
-          boxShadow: "0 30px 80px rgba(0,0,0,0.18)",
         }}
       >
         <video
@@ -217,8 +216,6 @@ export default function Landing() {
                   borderRadius: 9999,
                   padding: "0 18px",
                   height: 44,
-                  backdropFilter: "blur(8px)",
-                  WebkitBackdropFilter: "blur(8px)",
                 }}
               >
                 <svg

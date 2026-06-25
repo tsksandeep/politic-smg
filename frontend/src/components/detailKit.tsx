@@ -39,7 +39,7 @@ export function CommentList({ comments }: { comments: ExampleComment[] }) {
         <div key={i} className="panel" style={{ padding: "12px 14px", display: "flex", gap: 12, alignItems: "flex-start" }}>
           <span style={{ width: 3, alignSelf: "stretch", borderRadius: 9999, background: sentimentColor(c.sentiment), flexShrink: 0 }} aria-hidden="true" />
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 14, color: "rgba(255,255,255,0.92)", lineHeight: 1.5 }}>{c.body}</div>
+            <div style={{ fontSize: 14, color: color.text, lineHeight: 1.5 }}>{c.body}</div>
             <div style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.04em", color: color.textFaint, marginTop: 6 }}>
               <span style={{ color: sentimentColor(c.sentiment) }}>{c.sentiment}</span>
               {" "}· {Math.round((c.sentiment_confidence ?? 0) * 100)}% · {c.language}

@@ -86,12 +86,13 @@ Deno.serve(async (req) => {
         .single();
       if (!post) continue;
 
-      await db.from("comment").insert({
+      const { data: inserted } = await db.from("comment").insert({
         post_id: post.id,
         commenter_hash: await hashCommenter(String(v.from?.id ?? v.from?.username ?? "unknown")),
         body: v.text ?? "",
         created_at: v.created_time ? new Date(v.created_time * 1000).toISOString() : null,
-      });
+      }).select("id").single();
+      if (inserted) await db.rpc("enqueue_analyze_comment", { p_comment: inserted.id });
       accepted++;
     }
   }

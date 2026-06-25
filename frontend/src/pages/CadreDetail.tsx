@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "../services/supabase";
 import AppShell from "../components/AppShell";
+import { SentimentDonut } from "../components/charts";
 import { CommentList, type ExampleComment, Metric, sectionLabel } from "../components/detailKit";
 import { CLASH, color, MONO } from "../theme";
 
@@ -73,25 +74,26 @@ export default function CadreDetail() {
         {cov.display_name}
       </h1>
 
-      <div className="panel" style={{ padding: 18, marginBottom: 14 }}>
-        <h3 style={sectionLabel}>Coverage</h3>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 16 }}>
-          <Metric label="Positive" value={String(pos)} accent={color.positive} />
-          <Metric label="Negative" value={String(neg)} accent={color.ember} />
-          <Metric label="Neutral" value={String(cov.neutral_count)} />
-          <Metric label="Total" value={String(cov.total_count)} />
-        </div>
-        {pn > 0 && (
-          <>
-            <div style={{ display: "flex", height: 8, borderRadius: 9999, overflow: "hidden", background: "rgba(255,255,255,0.08)" }}>
-              <div style={{ width: `${posPct}%`, background: color.positive }} />
-              <div style={{ width: `${100 - posPct}%`, background: color.ember }} />
-            </div>
-            <div style={{ fontFamily: MONO, fontSize: 11, color: color.textFaint, marginTop: 7 }}>
+      <div className="panel coverage-card" style={{ padding: 20, marginBottom: 16 }}>
+        <div>
+          <h3 style={sectionLabel}>Coverage</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "20px 18px" }}>
+            <Metric label="Positive" value={String(pos)} accent={color.positive} />
+            <Metric label="Negative" value={String(neg)} accent={color.ember} />
+            <Metric label="Neutral" value={String(cov.neutral_count)} />
+            <Metric label="Total" value={String(cov.total_count)} />
+          </div>
+          {pn > 0 && (
+            <div style={{ fontFamily: MONO, fontSize: 11, color: color.textFaint, marginTop: 18 }}>
               {posPct}% positive · {100 - posPct}% negative (of polarized reactions)
             </div>
-          </>
-        )}
+          )}
+        </div>
+        <div>
+          {cov.total_count > 0
+            ? <SentimentDonut positive={pos} negative={neg} neutral={cov.neutral_count} />
+            : <div style={{ height: 200, display: "grid", placeItems: "center", color: color.textFaint, fontFamily: MONO, fontSize: 12 }}>No coverage yet</div>}
+        </div>
       </div>
 
       <div className="detail-grid">
@@ -102,11 +104,9 @@ export default function CadreDetail() {
             {[...favourable, ...anti].map((nv) => {
               const accent = nv.stance === "pro_party" ? color.positive : color.ember;
               return (
-                <Link key={nv.narrative_id} to={`/narratives/${nv.narrative_id}`} className="panel card-link" style={{ padding: "12px 14px", position: "relative", display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                    <span style={{ width: 7, height: 7, borderRadius: 9999, background: accent, flexShrink: 0 }} aria-hidden="true" />
-                    <span style={{ color: color.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{nv.theme_summary ?? "Narrative"}</span>
-                  </span>
+                <Link key={nv.narrative_id} to={`/narratives/${nv.narrative_id}`} className="panel card-link" style={{ padding: "12px 14px 12px 18px", position: "relative", display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                  <span style={{ position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: 9999, background: accent }} aria-hidden="true" />
+                  <span style={{ color: color.text, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{nv.theme_summary ?? "Narrative"}</span>
                   <span style={{ fontFamily: MONO, fontSize: 11, color: accent, whiteSpace: "nowrap" }}>{nv.cadre_comment_count}</span>
                 </Link>
               );

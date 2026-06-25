@@ -42,4 +42,4 @@ Thumbs.db
 
 # ---- Misc local junk (root screenshot, not a project asset) ----
 /image.png
-.jpeg
+*.jpeg

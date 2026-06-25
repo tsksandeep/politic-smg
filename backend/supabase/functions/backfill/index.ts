@@ -6,6 +6,7 @@ import { serviceClient } from "../../shared/db.ts";
 import { ENDPOINTS } from "../../shared/endpoints.ts";
 import { hashCommenter } from "../../shared/hash.ts";
 import { errorResponse, jsonResponse, logger } from "../../shared/log.ts";
+import { youtubeAccessToken } from "../../shared/youtube.ts";
 
 const log = logger("backfill");
 const SINCE_DAYS = 30;
@@ -24,8 +25,23 @@ Deno.serve(async (req) => {
     return errorResponse(404, "not_connected", "account not found or not connected");
   }
 
-  const { data: token } = await db.rpc("read_account_token", { p_account: account_id });
-  if (!token) return errorResponse(400, "no_token", "could not resolve account token");
+  const { data: storedToken } = await db.rpc("read_account_token", { p_account: account_id });
+  if (!storedToken) return errorResponse(400, "no_token", "could not resolve account token");
+
+  // IG stores a usable access token directly; YT stores a refresh token → exchange for a fresh one.
+  let token = storedToken as string;
+  if (acct.platform === "youtube") {
+    try {
+      token = await youtubeAccessToken(storedToken as string);
+    } catch (e) {
+      log.error("youtube access-token exchange failed", { account: account_id, error: String(e) });
+      return errorResponse(
+        502,
+        "yt_token_exchange_failed",
+        "could not refresh YouTube access token",
+      );
+    }
+  }
 
   const sinceMs = Date.now() - SINCE_DAYS * 86400_000;
   const sinceIso = new Date(sinceMs).toISOString();
@@ -38,12 +54,13 @@ Deno.serve(async (req) => {
     body: string,
     when: string | null,
   ) {
-    await db.from("comment").insert({
+    const { data: inserted } = await db.from("comment").insert({
       post_id: postId,
       commenter_hash: await hashCommenter(externalCommenter),
       body,
       created_at: when,
-    });
+    }).select("id").single();
+    if (inserted) await db.rpc("enqueue_analyze_comment", { p_comment: inserted.id });
     comments++;
   }
 

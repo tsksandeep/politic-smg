@@ -9,11 +9,14 @@ import { serviceClient } from "../../shared/db.ts";
 import { ENDPOINTS } from "../../shared/endpoints.ts";
 import { hashCommenter } from "../../shared/hash.ts";
 import { jsonResponse, logger } from "../../shared/log.ts";
+import { youtubeAccessToken } from "../../shared/youtube.ts";
 
 const log = logger("ingest-youtube");
 const API = ENDPOINTS.youtubeApi;
 const DAILY_UNIT_BUDGET = Number(Deno.env.get("YT_DAILY_UNIT_BUDGET") ?? "9000");
 const CHANNELS_PER_RUN = Number(Deno.env.get("YT_CHANNELS_PER_RUN") ?? "50");
+// Optional local-test escape hatch: bypass per-channel Vault resolution with a fixed access token.
+const TOKEN_OVERRIDE = Deno.env.get("YT_ACCESS_TOKEN_OVERRIDE") ?? "";
 
 async function ytGet(path: string, params: Record<string, string>, accessToken: string) {
   const qs = new URLSearchParams(params).toString();
@@ -39,7 +42,7 @@ Deno.serve(async () => {
   // Round-robin a batch of connected channels (oldest last_ingested first).
   const { data: accounts } = await db
     .from("connected_account")
-    .select("id, external_id, token_ref")
+    .select("id, external_id")
     .eq("platform", "youtube")
     .eq("consent_status", "connected")
     .limit(CHANNELS_PER_RUN);
@@ -49,8 +52,28 @@ Deno.serve(async () => {
       log.warn("daily unit budget reached; deferring remainder", { units });
       break;
     }
-    // token_ref resolves to an access token in Vault; resolution omitted here for brevity.
-    const accessToken = Deno.env.get("YT_ACCESS_TOKEN_OVERRIDE") ?? acct.token_ref;
+
+    // Resolve a fresh access token: read the stored refresh token from Vault and exchange it
+    // (YT access tokens are short-lived). A local override bypasses this for offline tests.
+    let accessToken: string;
+    try {
+      if (TOKEN_OVERRIDE) {
+        accessToken = TOKEN_OVERRIDE;
+      } else {
+        const { data: refresh } = await db.rpc("read_account_token", { p_account: acct.id });
+        if (!refresh) {
+          log.warn("no refresh token in vault; skipping channel", { account: acct.id });
+          continue;
+        }
+        accessToken = await youtubeAccessToken(refresh as string);
+      }
+    } catch (e) {
+      log.error("token resolution failed; skipping channel", {
+        account: acct.id,
+        error: String(e),
+      });
+      continue;
+    }
 
     try {
       const ch = await ytGet("channels", {
@@ -91,12 +114,13 @@ Deno.serve(async () => {
         for (const t of threads.items ?? []) {
           const sn = t.snippet?.topLevelComment?.snippet;
           if (!sn) continue;
-          await db.from("comment").insert({
+          const { data: inserted } = await db.from("comment").insert({
             post_id: post.id,
             commenter_hash: await hashCommenter(sn.authorChannelId?.value ?? sn.authorDisplayName),
             body: sn.textOriginal ?? "",
             created_at: sn.publishedAt ?? null,
-          });
+          }).select("id").single();
+          if (inserted) await db.rpc("enqueue_analyze_comment", { p_comment: inserted.id });
           comments++;
         }
       }

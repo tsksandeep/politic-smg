@@ -8,6 +8,7 @@ import { supabase } from "../services/supabase";
 import { ConfidenceBadge } from "../components/ConfidenceBadge";
 import { FreshnessBanner } from "../components/FreshnessBanner";
 import AppShell from "../components/AppShell";
+import { CoverageChart } from "../components/charts";
 import { CLASH, color, MONO } from "../theme";
 
 interface Scope {
@@ -72,9 +73,7 @@ export default function Board() {
 
   const best = favourable[0] ?? null;
   const worst = favourable.length > 1 ? favourable[favourable.length - 1] : null;
-  const posCadres = [...cadres].filter((c) => c.positive_count > 0).sort((x, y) => y.positive_count - x.positive_count).slice(0, 6);
-  const negCadres = [...cadres].filter((c) => c.negative_count > 0).sort((x, y) => y.negative_count - x.negative_count).slice(0, 6);
-  const freshest = [...anti.map((a) => a.data_fresh_as_of), ...favourable.map((f) => f.data_fresh_as_of)].filter(Boolean).sort().at(-1) ?? null;
+  const freshest =[...anti.map((a) => a.data_fresh_as_of), ...favourable.map((f) => f.data_fresh_as_of)].filter(Boolean).sort().at(-1) ?? null;
 
   return (
     <AppShell title="War Room">
@@ -91,7 +90,7 @@ export default function Board() {
       </div>
 
       {/* 1 + 2: best & worst favourable */}
-      <SectionHead label="In favour of the party — best & worst" dot={color.positive} />
+      <SectionHead label="In favour of the party — best & worst" />
       <div className="two-col" style={{ marginBottom: 30 }}>
         {best
           ? <FavourableCard n={best} tone="best" tag="BEST IN FAVOUR" />
@@ -102,7 +101,7 @@ export default function Board() {
       </div>
 
       {/* 3: anti-party narratives */}
-      <SectionHead label="Anti-party narratives" dot={color.ember} />
+      <SectionHead label="Anti-party narratives" />
       {anti.length === 0
         ? <EmptyPanel text="No active anti-party narratives detected." />
         : (
@@ -111,36 +110,23 @@ export default function Board() {
           </div>
         )}
 
-      {/* 4 + 5: cadre coverage */}
-      <SectionHead label="Cadre coverage" dot={color.textDim} />
-      <div className="two-col">
-        <div>
-          <SubHead label="Maximum positive coverage" c={color.positive} />
-          <CadreBars rows={posCadres} kind="pos" />
-        </div>
-        <div>
-          <SubHead label="Maximum negative coverage" c={color.ember} />
-          <CadreBars rows={negCadres} kind="neg" />
-        </div>
-      </div>
+      {/* 4 + 5: cadre coverage — positive vs negative per cadre */}
+      <SectionHead label="Cadre coverage — positive vs negative" />
+      {cadres.length === 0
+        ? <EmptyPanel text="No cadre coverage yet." />
+        : (
+          <div className="panel" style={{ padding: "20px 18px 14px" }}>
+            <CoverageChart rows={cadres} />
+          </div>
+        )}
     </AppShell>
   );
 }
 
-function SectionHead({ label, dot }: { label: string; dot: string }) {
+function SectionHead({ label }: { label: string }) {
   return (
-    <div className="scanline" style={{ display: "flex", alignItems: "center", gap: 9, paddingBottom: 8, marginBottom: 14 }}>
-      <span style={{ width: 7, height: 7, borderRadius: 9999, background: dot, boxShadow: `0 0 8px ${dot}` }} />
+    <div className="scanline" style={{ paddingBottom: 8, marginBottom: 14 }}>
       <span style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", color: color.textDim }}>{label}</span>
-    </div>
-  );
-}
-
-function SubHead({ label, c }: { label: string; c: string }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-      <span style={{ width: 6, height: 6, borderRadius: 9999, background: c }} />
-      <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: color.textFaint }}>{label}</span>
     </div>
   );
 }
@@ -159,7 +145,7 @@ function FavourableCard({ n, tone, tag }: { n: NarrativeCard; tone: "best" | "wo
   const accent = tone === "best" ? color.positive : color.neutral;
   return (
     <Link to={`/narratives/${n.id}`} className="panel card-link" style={{ padding: "18px 20px 18px 22px", position: "relative" }}>
-      <span style={{ position: "absolute", left: 0, top: 14, bottom: 14, width: 3, borderRadius: 9999, background: accent, boxShadow: `0 0 12px ${accent}` }} aria-hidden="true" />
+      <span style={{ position: "absolute", left: 0, top: 14, bottom: 14, width: 3, borderRadius: 9999, background: accent }} aria-hidden="true" />
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
         <span style={{ fontFamily: CLASH, fontSize: 17, fontWeight: 600, lineHeight: 1.25, color: color.text }}>
           {n.theme_summary ?? "Favourable narrative"}
@@ -175,7 +161,7 @@ function FavourableCard({ n, tone, tag }: { n: NarrativeCard; tone: "best" | "wo
 function AntiCard({ a }: { a: AlertCard }) {
   return (
     <Link to={`/alerts/${a.id}`} className="panel card-link" style={{ padding: "18px 20px 18px 22px", position: "relative" }}>
-      <span style={{ position: "absolute", left: 0, top: 14, bottom: 14, width: 3, borderRadius: 9999, background: color.ember, boxShadow: `0 0 12px ${color.ember}` }} aria-hidden="true" />
+      <span style={{ position: "absolute", left: 0, top: 14, bottom: 14, width: 3, borderRadius: 9999, background: color.ember }} aria-hidden="true" />
       <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "flex-start" }}>
         <span style={{ fontFamily: CLASH, fontSize: 17, fontWeight: 600, lineHeight: 1.25, color: color.text }}>
           {a.theme_summary ?? "Emerging narrative"}
@@ -190,31 +176,6 @@ function AntiCard({ a }: { a: AlertCard }) {
         <ConfidenceBadge label="coordination" confidence={a.coordination_score ?? 0} />
       </div>
     </Link>
-  );
-}
-
-function CadreBars({ rows, kind }: { rows: Cadre[]; kind: "pos" | "neg" }) {
-  const accent = kind === "pos" ? color.positive : color.ember;
-  const val = (r: Cadre) => (kind === "pos" ? r.positive_count : r.negative_count);
-  const max = Math.max(...rows.map(val), 1);
-  if (rows.length === 0) return <EmptyPanel text="No coverage yet." />;
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {rows.map((r, idx) => (
-        <Link key={r.cadre_id} to={`/cadres/${r.cadre_id}`} className="panel card-link" style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontFamily: MONO, fontSize: 12, color: color.textFaint, width: 16, textAlign: "right" }}>{idx + 1}</span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
-              <span style={{ fontWeight: 500, color: color.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.display_name}</span>
-              <span style={{ fontFamily: MONO, fontSize: 12, color: accent }}>{val(r)}</span>
-            </div>
-            <div style={{ height: 5, borderRadius: 9999, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${Math.round((val(r) / max) * 100)}%`, background: accent, borderRadius: 9999 }} />
-            </div>
-          </div>
-        </Link>
-      ))}
-    </div>
   );
 }
 

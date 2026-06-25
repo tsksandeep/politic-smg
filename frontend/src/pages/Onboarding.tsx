@@ -103,7 +103,7 @@ export default function Onboarding() {
       {notice && (
         <div
           className="panel"
-          style={{ padding: "12px 16px", marginBottom: 22, fontSize: 13, color: noticeOk ? "#bff0d8" : "#FFB7A6", borderColor: noticeOk ? "rgba(55,194,139,0.4)" : "rgba(255,90,54,0.4)" }}
+          style={{ padding: "12px 16px", marginBottom: 22, fontSize: 13, color: noticeOk ? color.positive : "#B23A20", background: noticeOk ? "rgba(21,128,61,0.06)" : "rgba(214,73,46,0.06)", borderColor: noticeOk ? "rgba(21,128,61,0.30)" : "rgba(214,73,46,0.30)" }}
         >
           {notice}
         </div>

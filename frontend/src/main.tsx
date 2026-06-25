@@ -23,12 +23,12 @@ function Splash() {
         minHeight: "100vh",
         display: "grid",
         placeItems: "center",
-        background: "#05070d",
-        color: "rgba(255,255,255,0.55)",
+        background: "#F5F6F8",
+        color: "#64748B",
       }}
     >
       <div style={{ textAlign: "center" }}>
-        <div style={{ fontFamily: "'Clash Display', ui-sans-serif, system-ui, sans-serif", fontSize: 22, fontWeight: 600, color: "#fff", letterSpacing: "-0.02em" }}>
+        <div style={{ fontFamily: "'Clash Display', ui-sans-serif, system-ui, sans-serif", fontSize: 22, fontWeight: 600, color: "#0F172A", letterSpacing: "-0.02em" }}>
           Politic
         </div>
         <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", marginTop: 8 }}>

@@ -24,6 +24,9 @@ function backToOnboarding(params: Record<string, string>): Response {
 
 interface TokenResult {
   accessToken: string;
+  /** YouTube only: the durable OAuth refresh token (stored in Vault; exchanged for short-lived
+   *  access tokens at poll time — see shared/youtube.ts). Absent for Instagram. */
+  refreshToken?: string;
   externalId: string;
   supported: boolean;
   reason?: string;
@@ -76,7 +79,7 @@ async function exchange(platform: string, code: string): Promise<TokenResult> {
     }),
   });
   if (!tokenRes.ok) throw new Error(`YT token ${tokenRes.status}: ${await tokenRes.text()}`);
-  const { access_token } = await tokenRes.json();
+  const { access_token, refresh_token } = await tokenRes.json();
   const ch = await (await fetch(
     `${ENDPOINTS.youtubeApi}/channels?part=id&mine=true&access_token=${access_token}`,
   )).json();
@@ -84,7 +87,13 @@ async function exchange(platform: string, code: string): Promise<TokenResult> {
   if (!channelId) {
     return { accessToken: access_token, externalId: "", supported: false, reason: "no_channel" };
   }
-  return { accessToken: access_token, externalId: channelId, supported: true };
+  // oauth-start requests access_type=offline + prompt=consent, so Google returns a refresh token.
+  return {
+    accessToken: access_token,
+    refreshToken: refresh_token,
+    externalId: channelId,
+    supported: true,
+  };
 }
 
 Deno.serve(async (req) => {
@@ -125,7 +134,19 @@ Deno.serve(async (req) => {
     return backToOnboarding({ error: "account_error" });
   }
 
-  await db.rpc("store_account_token", { p_account: account.id, p_token: result.accessToken });
+  // Store the DURABLE credential in Vault: IG → long-lived access token (rotated by token-refresh);
+  // YouTube → refresh token (exchanged for short-lived access tokens at poll time). If Google did
+  // not return a refresh token, fall back to the access token so the immediate backfill still runs
+  // (ongoing polling would then need re-consent — logged when the exchange fails).
+  const durableToken = st.platform === "youtube"
+    ? (result.refreshToken ?? result.accessToken)
+    : result.accessToken;
+  if (st.platform === "youtube" && !result.refreshToken) {
+    log.warn("YT consent returned no refresh_token; polling will require re-consent", {
+      account: account.id,
+    });
+  }
+  await db.rpc("store_account_token", { p_account: account.id, p_token: durableToken });
   await db.from("oauth_state").delete().eq("state", state);
 
   // Fire-and-forget 30-day backfill (FR-010a).
