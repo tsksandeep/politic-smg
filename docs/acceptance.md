@@ -71,6 +71,69 @@ incompetence and repeated failure to fulfill promises."), clustered by stance; *
 narratives raised 0 alerts** (FR-005 healthy-spike exclusion holds with real embeddings). Switching
 back to mock or cloud is env-only (no code change).
 
+## Feature coverage matrix (every FR / SC / edge case / delivered extension)
+
+Automated tests live in `backend/supabase/tests/` (15 files: 14 Deno + 1 pgTAP). New files added in
+this pass are marked **NEW**. DB-backed tests run via `make test`; function-backed via the stack env.
+
+### Functional requirements
+| FR | Covered by | Status |
+|----|-----------|--------|
+| FR-001 consented-only ingest | e2e (consent→connected, backfill); `boundary_assign` FR-011 | ✅ |
+| FR-002 detect rising narrative → alert | `detect_alert`, e2e detect | ✅ |
+| FR-003 coordination signal | **`coordination`** (swarm vs lone critic), `detect_alert`, e2e | ✅ |
+| FR-004 probabilistic = labeled signal | `warroom_api` (`is_signal_not_verdict`), e2e signals, UI badges | ✅ |
+| FR-005 hostile vs healthy | `healthy_spike` (positive), **`quiet_period`** (neutral/none), `detect_alert` | ✅ |
+| FR-006 live war-room view | UI Realtime (board re-fetches on `alert`/`narrative` change); publication verified | ✅ (UI) |
+| FR-007 alert detail | e2e `alert-detail`, `warroom_api`, UI AlertDetail | ✅ |
+| FR-008 anonymization (hashed, no raw) | `anonymization`, e2e/`warroom_api` (no identity in payload), **`favourable_coverage`** DR-3 | ✅ |
+| FR-009 30-day raw-text purge | **`retention`** (body nulled, hash/sentiment kept, fresh untouched) | ✅ NEW |
+| FR-010 connect/disconnect/purge | e2e (onboard, revoke, retention-purge), `onboarding` (revoke→recompute) | ✅ |
+| FR-010a 30-day backfill | e2e backfill (≥25 from last 30d) | ✅ |
+| FR-011 no opposition/non-consented | **`boundary_assign`** (signed webhook for unknown account → 0 ingested) | ✅ NEW |
+| FR-012 observe & flag only | Architectural — no block/gate/delete endpoint exists (verified by absence) | ✅ (by design) |
+| FR-013 ack/assign/annotate/close | `triage` (ack→close+note), **`boundary_assign`** (assign), e2e, UI triage | ✅ (assign NEW) |
+| FR-014 record detection→response latency | `triage` (`response_latency`≈5 min), e2e | ✅ |
+| FR-015 freshness visible | UI FreshnessBanner ("1 min ago" shown live) | ⚠️ happy-path shown; >20-min stale-warning path not exercised |
+| FR-016 Admin/Analyst RBAC | Direct simulated-JWT check (analyst 0 rows / admin 1), e2e admin tune, `rls_settings` (pgTAP, CI) | ✅ |
+| FR-017 India data residency | Deployment/config assertion (config.toml, `embeddings.ts` asia-south1) — not runtime-testable locally | ⚠️ config-level |
+
+### Success criteria
+| SC | Covered by | Status |
+|----|-----------|--------|
+| SC-001 alert ≤15 min | `docs/perf.md` (load reasoning); no automated timing assertion | ⚠️ not timed |
+| SC-002 comprehensible ≤30s | Detail structure verified (theme/examples/signals); UX timing not automatable | ✅ structural |
+| SC-003 ≥80% genuine alerts | Pilot human-judgment metric — not automatable | ⚠️ pilot metric |
+| SC-004 100% outputs confidence-labeled | `warroom_api` + e2e signals + UI badges | ✅ |
+| SC-005 onboard <5 min, revoke next cycle | Flow tested (e2e onboard+revoke); wall-clock not asserted | ✅ flow |
+| SC-006 latency trend over pilot | Mechanism tested (`response_latency` recorded); longitudinal trend not automatable | ✅ mechanism |
+| SC-007 freshness, never silently stale | UI FreshnessBanner | ⚠️ happy-path shown; stale path not exercised |
+
+### Edge cases
+| Edge case | Covered by | Status |
+|-----------|-----------|--------|
+| Healthy spike vs hostile spike | `healthy_spike` + `detect_alert` | ✅ |
+| Single loud critic vs coordination | **`coordination`** (lone hash low score, swarm high) | ✅ NEW |
+| Sarcasm / Tamil-English code-mixing | Real-local-LLM run (code-mixed → `language=mixed, hostile`); mock lexicon path | ✅ LLM-validated |
+| Consent revoked mid-incident | `onboarding` (alert auto-closes), e2e revoke→recompute | ✅ |
+| Platform throttling | `ingest-youtube` quota gate (Principle VII) tested | ⚠️ gate tested; budget-stop degradation not exercised (YT disabled) |
+| Deleted comments at source | **Not implemented** — no source-deletion sync exists in code | ❌ unbuilt feature (see below) |
+| Quiet periods | **`quiet_period`** (neutral-only and empty → 0 alerts) | ✅ NEW |
+
+### Delivered extensions
+| DR | Covered by | Status |
+|----|-----------|--------|
+| DR-1 favourable (pro-party) narratives | **`favourable_coverage`** (pro_party on board, performance_score>0, 0 alerts) | ✅ NEW |
+| DR-2 cadre coverage | **`favourable_coverage`** (positive/negative counts per cadre) | ✅ NEW |
+| DR-3 anonymized drill-downs | **`favourable_coverage`** (views expose no identity) + UI NarrativeDetail | ✅ NEW |
+
+### Open items (honest)
+- **Deleted-comments-at-source is an unbuilt feature** — the spec lists it as an edge case, but no
+  code syncs source-side deletions (only 30-day age purge + revoked-account purge exist). This is a
+  product gap to either build or explicitly de-scope, not a missing test.
+- **FR-015 / SC-007 stale path**, **platform-throttling degradation**, and the **timing/pilot SCs**
+  (SC-001/003/005/006) are not automatable in a local run; tracked here and in `docs/perf.md`.
+
 ## Caveats / not validated locally
 - **pgTAP** (`tests/rls_settings_test.sql`) is **not runnable on the self-hosted Postgres image**
   (no `pgtap` extension). Its assertion (analyst cannot write `detection_settings`) is instead
