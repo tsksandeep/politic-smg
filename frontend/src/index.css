@@ -1,0 +1,55 @@
+html, body { margin: 0; padding: 0; }
+body { font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif; background: #FFFFFF; -webkit-font-smoothing: antialiased; }
+* { box-sizing: border-box; }
+#root { min-height: 100vh; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+.glass-input::placeholder { color: rgba(255,255,255,0.6); }
+.glass-input:focus { outline: none; }
+
+/* Staggered load reveal — base is visible; hidden only while stage not yet entered */
+.rv { opacity: 1; transform: none; transition: opacity .6s cubic-bezier(.16,1,.3,1), transform .6s cubic-bezier(.16,1,.3,1); }
+.hero-stage .rv { opacity: 0; transform: translateY(16px); }
+.hero-stage.is-in .rv { opacity: 1; transform: none; }
+.rv-1 { transition-delay: 0ms; }
+.rv-2 { transition-delay: 140ms; }
+
+/* Email field + button focus rings (ember) */
+.email-field { transition: box-shadow .15s ease; }
+.email-field:focus-within { outline: 2px solid #D6492E; outline-offset: 2px; }
+.signin-btn { background: #D6492E; transition: background .2s ease; }
+.signin-btn:hover { background: #B83C24; }
+.signin-btn:focus-visible { outline: 2px solid #D6492E; outline-offset: 2px; }
+.signin-btn .arrow-circle { transition: transform .2s ease; }
+.signin-btn:hover .arrow-circle { transform: translateX(4px); }
+
+/* Footer links */
+.footlink { transition: color .2s; }
+.footlink:hover { color: #ffffff; }
+
+/* Film grain */
+.grain {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+}
+
+/* Sweeping radar scan line across the HUD readout */
+@keyframes hud-scan {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+.hud-scan { animation: hud-scan 3.6s linear infinite; }
+
+/* Slow drift on the color-grade glow so the frame feels alive, not static */
+@keyframes ember-drift {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 0.85; }
+}
+.ember-glow { animation: ember-drift 7s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rv, .hero-stage .rv, .hero-stage.is-in .rv { opacity: 1 !important; transform: none !important; transition: none !important; }
+  .signin-btn .arrow-circle { transition: none !important; }
+  .hud-scan, .ember-glow { animation: none !important; }
+}

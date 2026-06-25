@@ -1,0 +1,77 @@
+# Supabase config — Politic-SMG (single tenant per party).
+# Drives both local dev (`supabase start`) and the linked hosted project.
+# NOTE: the HOSTED project region MUST be an India region (e.g. ap-south-1 / Mumbai) to
+# satisfy constitution Principle III (data residency) — set at project creation.
+
+project_id = "politic-smg"
+
+[api]
+enabled = true
+port = 54321
+# We use pgmq only inside SQL (not over the API), so pgmq_public is not exposed here.
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[db.pooler]
+enabled = false
+
+[realtime]
+enabled = true
+
+[studio]
+enabled = true
+port = 54323
+
+# Local mailbox (captures auth emails so you can grab confirmation links in dev).
+[inbucket]
+enabled = true
+port = 54324
+
+[storage]
+enabled = true
+
+[auth]
+enabled = true
+# Match the local frontend dev origin so redirects/JWT audience line up.
+site_url = "http://localhost:5173"
+additional_redirect_urls = ["http://localhost:5173"]
+jwt_expiry = 3600
+# Internal party users only (Admin / Analyst) — an Admin provisions users.
+enable_signup = false
+
+[auth.email]
+enable_signup = false
+enable_confirmations = false
+
+[edge_runtime]
+enabled = true
+# "oneshot" gives fast hot-reload for `supabase functions serve` in local dev.
+policy = "oneshot"
+inspector_port = 8083
+
+# --- Per-function auth ---
+# Public, unauthenticated endpoints: called by external platforms with no Supabase JWT, so the
+# gateway's JWT check MUST be disabled. They do their own verification instead.
+# ig-webhook    : Meta calls it; authenticity is enforced by the x-hub-signature-256 HMAC check.
+# oauth-callback: browser redirect back from Meta/Google; authenticity is enforced by the
+#                 single-use, server-issued `state` row matched in oauth_state.
+[functions.ig-webhook]
+verify_jwt = false
+
+[functions.oauth-callback]
+verify_jwt = false
+
+# All other functions keep verify_jwt = true (the default):
+#  - oauth-start / accounts / account-revoke / alert-detail / alert-triage / detection-settings
+#    are called by the SPA with the signed-in user's JWT (RLS applies).
+#  - analyze-comments / detect-narratives / ingest-youtube / token-refresh / retention-purge are
+#    invoked by pg_cron with the service-role key as the bearer (see 0010_cron_auth.sql).
+
+# pg_cron / pgmq / pg_net / vector / vault are enabled via migrations and ship with the
+# local Postgres image; no extra config needed here.

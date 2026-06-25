@@ -1,0 +1,32 @@
+# Local dev — frontend only.
+#
+# The BACKEND (Postgres + Auth + Realtime + Storage + Studio + Edge Runtime) is run by the
+# Supabase CLI (`supabase start`), which manages its own Docker Compose stack — that is the
+# officially recommended approach and is not reinvented here. This file runs just the Vite
+# dev container; the browser talks to the Supabase API at http://localhost:54321 directly.
+#
+# Usage: `make up` (starts Supabase + functions + this web container). See docs/local-dev.md.
+
+services:
+  web:
+    build:
+      context: ./frontend
+      target: dev
+    ports:
+      - "5173:5173"
+    environment:
+      # Local Supabase API + the well-known local anon key (printed by `supabase start`).
+      # These are NOT secrets — they are fixed local-dev demo credentials.
+      VITE_SUPABASE_URL: "http://localhost:54321"
+      VITE_SUPABASE_ANON_KEY: "${SUPABASE_LOCAL_ANON_KEY}"
+      # Reliable file watching inside the container.
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      # Bind the source for hot reload; anonymous volume shadows node_modules so the image's
+      # (correct-arch) deps are used instead of the host's.
+      - ./frontend:/app
+      - /app/node_modules
+    # Vite must reach the host's Supabase ports from the browser (localhost works); this lets
+    # the container itself resolve host services if ever needed.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
