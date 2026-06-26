@@ -1,78 +1,70 @@
 // charts.tsx — Recharts visualizations, themed for the light dashboard.
-//  • CoverageChart  — grouped horizontal bars: positive vs negative coverage per cadre (clickable).
-//  • SentimentDonut — 3-way positive/negative/neutral split for one cadre.
-// Numbers are mono-labelled directly on the marks (colour is never the sole indicator).
+//  • DecayChart — a narrative's lifecycle/decay curve from narrative_observation: per-window
+//    volume (bars) + engagement velocity (line). Engagement is a PROXY FOR REACH (Principle V);
+//    the axis caption says so. Numbers are mono-labelled; colour is never the sole indicator.
 
-import { useNavigate } from "react-router-dom";
-import { Bar, BarChart, Cell, LabelList, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  Area,
+  Bar,
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { color, MONO } from "../theme";
 
 const tick = { fontFamily: MONO, fontSize: 11, fill: color.textDim };
 const tooltipStyle = { borderRadius: 10, border: `1px solid ${color.border}`, fontFamily: MONO, fontSize: 12 };
-const legendStyle = { fontFamily: MONO, fontSize: 11 };
-const labelStyle = { fontFamily: MONO, fontSize: 11, fill: color.text };
 
-interface CoverageRow {
-  cadre_id: string;
-  display_name: string;
-  positive_count: number;
-  negative_count: number;
+export interface Observation {
+  at: string;
+  volume: number;
+  velocity: number;
 }
 
-export function CoverageChart({ rows }: { rows: CoverageRow[] }) {
-  const navigate = useNavigate();
-  const data = [...rows].sort((a, b) => (b.positive_count + b.negative_count) - (a.positive_count + a.negative_count));
-  const height = Math.max(180, data.length * 58 + 44);
-  // deno-lint-ignore no-explicit-any
-  const open = (d: any) => {
-    const id = d?.cadre_id ?? d?.payload?.cadre_id;
-    if (id) navigate(`/cadres/${id}`);
-  };
+function fmtTime(at: string): string {
+  const d = new Date(at);
+  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:00`;
+}
+
+export function DecayChart({ observations }: { observations: Observation[] }) {
+  if (!observations || observations.length === 0) {
+    return (
+      <div className="panel" style={{ padding: 18, color: color.textFaint, fontSize: 13 }}>
+        No lifecycle observations captured yet — coverage may be ramping (see Coverage).
+      </div>
+    );
+  }
+  const data = [...observations]
+    .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
+    .map((o) => ({ t: fmtTime(o.at), volume: o.volume, velocity: Math.round(o.velocity * 10) / 10 }));
+
   return (
     <div>
-      <ResponsiveContainer width="100%" height={height}>
-        <BarChart layout="vertical" data={data} margin={{ top: 4, right: 30, bottom: 0, left: 6 }} barCategoryGap={16} barGap={2}>
-          <XAxis type="number" tick={tick} axisLine={false} tickLine={false} allowDecimals={false} />
-          <YAxis type="category" dataKey="display_name" tick={tick} axisLine={false} tickLine={false} width={100} />
+      <ResponsiveContainer width="100%" height={260}>
+        <ComposedChart data={data} margin={{ top: 10, right: 16, bottom: 0, left: -8 }}>
+          <defs>
+            <linearGradient id="vel" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color.ember} stopOpacity={0.25} />
+              <stop offset="100%" stopColor={color.ember} stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid stroke={color.border} vertical={false} />
+          <XAxis dataKey="t" tick={tick} axisLine={false} tickLine={false} minTickGap={24} />
+          <YAxis yAxisId="v" tick={tick} axisLine={false} tickLine={false} allowDecimals={false} />
+          <YAxis yAxisId="e" orientation="right" tick={tick} axisLine={false} tickLine={false} />
           <Tooltip cursor={{ fill: "rgba(15,23,42,0.04)" }} contentStyle={tooltipStyle} />
-          <Legend wrapperStyle={legendStyle} iconType="circle" />
-          <Bar dataKey="positive_count" name="Positive" fill={color.positive} radius={[0, 4, 4, 0]} cursor="pointer" onClick={open}>
-            <LabelList dataKey="positive_count" position="right" style={labelStyle} />
-          </Bar>
-          <Bar dataKey="negative_count" name="Negative" fill={color.hostile} radius={[0, 4, 4, 0]} cursor="pointer" onClick={open}>
-            <LabelList dataKey="negative_count" position="right" style={labelStyle} />
-          </Bar>
-        </BarChart>
+          <Bar yAxisId="v" dataKey="volume" name="Volume" fill={color.neutral} fillOpacity={0.55} radius={[3, 3, 0, 0]} />
+          <Area yAxisId="e" dataKey="velocity" name="Velocity (proxy)" stroke="none" fill="url(#vel)" />
+          <Line yAxisId="e" type="monotone" dataKey="velocity" name="Velocity (proxy)" stroke={color.ember} strokeWidth={2} dot={false} />
+        </ComposedChart>
       </ResponsiveContainer>
       <p style={{ fontFamily: MONO, fontSize: 10, color: color.textFaint, margin: "8px 0 0", letterSpacing: "0.04em" }}>
-        Select a bar to open a cadre.
+        Bars = new posts per window · line = engagement velocity (a proxy for reach — impressions are unobservable).
       </p>
-    </div>
-  );
-}
-
-export function SentimentDonut({ positive, negative, neutral }: { positive: number; negative: number; neutral: number }) {
-  const total = positive + negative + neutral;
-  const data = [
-    { name: "Positive", value: positive, fill: color.positive },
-    { name: "Negative", value: negative, fill: color.hostile },
-    { name: "Neutral", value: neutral, fill: color.neutral },
-  ].filter((d) => d.value > 0);
-  return (
-    <div style={{ position: "relative" }}>
-      <ResponsiveContainer width="100%" height={230}>
-        <PieChart>
-          <Pie data={data} dataKey="value" nameKey="name" innerRadius={64} outerRadius={92} paddingAngle={2} stroke="#fff" strokeWidth={2}>
-            {data.map((d) => <Cell key={d.name} fill={d.fill} />)}
-          </Pie>
-          <Tooltip contentStyle={tooltipStyle} />
-          <Legend wrapperStyle={legendStyle} iconType="circle" />
-        </PieChart>
-      </ResponsiveContainer>
-      <div style={{ position: "absolute", top: "calc(50% - 18px)", left: 0, right: 0, textAlign: "center", pointerEvents: "none" }}>
-        <div style={{ fontFamily: "'Clash Display', ui-sans-serif, system-ui, sans-serif", fontSize: 26, fontWeight: 600, color: color.text, lineHeight: 1 }}>{total}</div>
-        <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: color.textFaint, marginTop: 3 }}>comments</div>
-      </div>
     </div>
   );
 }

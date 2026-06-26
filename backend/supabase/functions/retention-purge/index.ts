@@ -1,76 +1,37 @@
-// functions/retention-purge (T045) — LAUNCH-BLOCKING (Principle III, FR-009/FR-010).
-// Daily pg_cron job that:
-//   1) deletes raw comment text older than 30 days (anonymized derivatives are kept),
-//   2) purges all data for revoked accounts,
-//   3) recomputes narratives/alerts so removed data drops out,
-//   4) purges raw-payload Storage objects older than 30 days (same retention as comment.body).
-// DB steps (1-3) are a single SQL function (purge_expired_data) for atomicity; the Storage sweep
-// (4) runs here because deleting blobs needs the Storage API, not SQL.
+// functions/retention-purge/index.ts — automated raw-text + media purge (cron, service role).
+//
+// Principle III (NON-NEGOTIABLE — data minimisation / no-warehousing): raw text columns
+// (post.caption, comment.body) carry a retention window and MUST be purged on schedule (FR-018), and
+// raw media is NEVER warehoused — media_url is cleared the moment a transcript is emitted, and this
+// job nulls any leftover media_url as defence-in-depth.
+//
+// Retention window: the launch IN-DPDP profile is 30 days (overridable per deployment via
+// RETENTION_DAYS). There is no per-tenant retention column in the schema yet, so the same default
+// applies to every tenant; the loop is per-tenant so future per-tenant windows drop in cleanly and
+// so counts are reported per tenant. Anchors: post.first_seen_at / comment.ingested_at (when we
+// captured the text), which is the correct retention clock — not the source timestamp.
 
 import { serviceClient } from "../../shared/db.ts";
-import { jsonResponse, logger } from "../../shared/log.ts";
+import { errorResponse, jsonResponse, logger, preflight } from "../../shared/log.ts";
 
 const log = logger("retention-purge");
-const RAW_BUCKET = "raw-payloads";
-const RETAIN_MS = 30 * 86400_000;
 
-// Remove raw-payload objects older than 30 days. Walks the bucket root plus one level of
-// (typically date-prefixed) folders — the layout an archiver is expected to use. Returns the count
-// removed. Best-effort: a Storage error is logged, not fatal, so DB retention is never blocked.
-async function purgeStoragePayloads(
-  db: ReturnType<typeof serviceClient>,
-  cutoffMs: number,
-): Promise<number> {
-  let removed = 0;
-  const stale = (createdAt?: string) =>
-    createdAt != null && new Date(createdAt).getTime() < cutoffMs;
+const RETENTION_DAYS = Number(Deno.env.get("RETENTION_DAYS") ?? "30");
 
-  async function sweep(prefix: string): Promise<void> {
-    const { data: entries, error } = await db.storage.from(RAW_BUCKET).list(prefix, {
-      limit: 1000,
-    });
-    if (error) {
-      log.warn("storage list failed", { prefix, error: error.message });
-      return;
-    }
-    const files: string[] = [];
-    for (const e of entries ?? []) {
-      const path = prefix ? `${prefix}/${e.name}` : e.name;
-      // A null id marks a folder placeholder; recurse one level into it.
-      if ((e as { id?: string | null }).id == null) {
-        if (!prefix) await sweep(path);
-        continue;
-      }
-      if (stale(e.created_at)) files.push(path);
-    }
-    if (files.length > 0) {
-      const { error: rmErr } = await db.storage.from(RAW_BUCKET).remove(files);
-      if (rmErr) log.warn("storage remove failed", { prefix, error: rmErr.message });
-      else removed += files.length;
-    }
-  }
+Deno.serve(async (req) => {
+  const pf = preflight(req);
+  if (pf) return pf;
 
-  await sweep("");
-  return removed;
-}
-
-Deno.serve(async () => {
   const db = serviceClient();
-  const { data, error } = await db.rpc("purge_expired_data");
+
+  // Delegate to the canonical SQL routine (migration 0007). One set-based UPDATE per column across
+  // all tenants — no PostgREST row cap, one shared definition with the tests. p_tenant=null = all.
+  const { error } = await db.rpc("retention_purge", { p_tenant: null, p_days: RETENTION_DAYS });
   if (error) {
-    log.error("purge failed", { error: error.message });
-    return jsonResponse({ error: error.message }, 500);
+    log.error("retention purge failed", { err: error.message });
+    return errorResponse(500, "purge_failed", "Could not run retention purge.");
   }
 
-  // Best-effort: a Storage outage (or no Storage service in local dev) must never block DB retention.
-  let storagePurged = 0;
-  try {
-    storagePurged = await purgeStoragePayloads(db, Date.now() - RETAIN_MS);
-  } catch (e) {
-    log.warn("storage payload purge skipped", { error: String(e) });
-  }
-
-  const result = { ...(data as Record<string, unknown>), raw_payloads_purged: storagePurged };
-  log.info("purge complete", { result });
-  return jsonResponse({ purged: result });
+  log.info("retention purge complete", { retention_days: RETENTION_DAYS });
+  return jsonResponse({ ok: true, retention_days: RETENTION_DAYS });
 });

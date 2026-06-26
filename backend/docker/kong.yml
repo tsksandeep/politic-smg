@@ -73,6 +73,19 @@ services:
         paths: [/realtime/v1/api]
     plugins:
       - name: cors
+  - name: storage-v1
+    url: http://storage:5000/
+    routes:
+      - name: storage-v1-all
+        strip_path: true
+        paths: [/storage/v1/]
+    plugins:
+      - name: cors
+  # Edge Functions — one wildcard route fronts the whole function set:
+  #   coordinator (node-token auth):  node-register · work-lease · submit · heartbeat
+  #   pipeline (pg_cron, service role): enrich · detect-narratives · coordination-detect ·
+  #                                     assign-work · reconcile · media-dispatch · retention-purge
+  #   war-room (user JWT):            alert-triage · detection-settings
   - name: functions-v1
     url: http://functions:8081/
     read_timeout: 150000

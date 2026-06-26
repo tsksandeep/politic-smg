@@ -1,81 +1,134 @@
-# Compliance — DPDP & Data Residency (T046)
+# Compliance — Jurisdiction-Aware Data Handling
 
-Maps the build to constitution Principle III and India's DPDP Act (substantive provisions
-enforceable from May 2027). Posture: **minimize & anonymize**.
+OpenPolitics is multi-tenant and multi-jurisdiction. Each tenant declares a **jurisdiction profile**
+that drives retention windows, identity handling, data residency, and which targets are in bounds
+(Principle VIII). The platform ships **one** profile enabled — **India / DPDP** — but the config is
+shaped to express stricter profiles without code changes.
 
-## Lawful basis
-- **Cadre data**: explicit OAuth consent per connected account. Revocation honored immediately
-  (ingestion stops; data purged on schedule). See `oauth-*`, `account-revoke`, `purge_expired_data`.
-- **Commenter data**: processed in aggregate for the legitimate purpose of detecting attacks on
-  the party's own posts. No per-citizen profiles are built or exposed.
+This document is the record of the legal posture and the risk owners. **It is not legal advice.**
 
-## Minimization & anonymization
-- Commenter handles are **hashed (keyed HMAC-SHA256) before storage** — raw handles are never
-  persisted (`shared/hash.ts`; proven by `tests/anonymization_test.ts`).
-- Detection operates on **patterns** (hashed IDs, timing, text similarity), not identities.
-- Alert detail and all APIs **never** return commenter identity (contract test `warroom_api_test.ts`).
+---
 
-## Retention & deletion
-- Raw comment text (`comment.body`) is deleted **30 days** after ingestion; anonymized
-  derivatives (hashed IDs, narratives, trends) may be retained (`purge_expired_data`, daily `pg_cron`).
-- Revoked accounts: all content purged on the scheduled run.
-- **Launch gate**: `retention-purge` (T045) MUST be deployed + scheduled before real data flows.
+## The legal bet (load-bearing)
 
-## Raw-payload archival (Storage)
-- The `raw-payloads` Storage bucket is provisioned in code (`migrations/0015_storage_retention.sql`)
-  as a **private, service-role-only** bucket. Raw platform payloads contain **un-hashed** commenter
-  handles, so — to honor minimization — the pipeline **does not archive raw payloads by default**.
-  The relational store only ever holds keyed-hashed IDs (`shared/hash.ts`).
-- If raw-payload archival is later enabled for a deployment, it is governed by the **same 30-day
-  retention** as `comment.body`: `retention-purge` sweeps and deletes bucket objects older than 30
-  days each day (`functions/retention-purge`). Any archiver MUST write under the private bucket only.
+The entire posture rests on **public, logged-out access**:
 
-## Residency
-- The Supabase project MUST be created in an **India region** (e.g. `ap-south-1`). Verified at
-  provisioning (`docs/deploy.md` §1). No personal data leaves India at rest.
-- **External processing posture (LLM + embeddings)**: comment text is sent to OpenRouter→Gemini for
-  classification and to the Gemini embedding endpoint. Posture and required confirmations:
-  - **Minimization in transit**: only the comment **body** is sent — never the commenter hash,
-    account, cadre, or any join key. The provider cannot reconstruct a per-citizen profile.
-  - **Region**: prefer an India-region inference path where the provider offers one; otherwise the
-    transfer is limited to anonymized comment text under the provider's DPA.
-  - **Required before production with real data** (external sign-off — owner: **party DPO + vendor**):
-    accept OpenRouter's and Google's data-processing addendums (DPA), confirm no-training / retention
-    terms on submitted content, and record the processing region. Tracked in "External sign-offs".
+- **Public-data-only (Principle II, non-negotiable).** The platform ingests only data publicly
+  accessible **without authenticating into any account**. Nodes use an isolated logged-out guest
+  session. The system **never** logs in, **never** uses anyone's credentials, and **never** defeats a
+  private gate, paywall, or follower-only restriction. Private accounts and private posts are out of
+  bounds, full stop. A `tracked_account` discovered to be private is flagged `is_private` and dropped
+  from capture.
+- **Why it matters.** This is the *Meta v. Bright Data* (N.D. Cal. 2024) line: scraping public,
+  unauthenticated data is not unauthorised access. Logging in would forfeit that protection and
+  reframe the activity as unauthorised access under the IT Act. **The no-login rule is hard and
+  cannot be waived** — it is enforced in the node client, not just promised here.
+- **No-warehousing of raw media (Principle III).** Media is fetched, OCR'd/transcribed, and the
+  derived **text only** is kept; the raw bytes are discarded. This sidesteps the
+  copyright-reproduction exposure that warehousing images/video would create.
 
-## Data Principal rights — grievance & erasure (DPDP)
-DPDP grants Data Principals rights of grievance and erasure. How each is served here:
-- **Grievance contact**: the deployment publishes a **Grievance Officer** contact (name + email) in
-  the party's privacy notice. Owner: **party** (per-deployment; not code).
-- **Cadre (account owner) erasure**: self-service — disconnect in the dashboard (`account-revoke`).
-  Ingestion stops immediately; all of that account's posts/comments are purged on the next
-  `retention-purge` run, and narratives/alerts recompute so the data stops driving signals at once
-  (`recompute_after_revoke`). This is the primary, automated erasure path.
-- **Commenter erasure**: commenter identities are **not stored** — only a non-reversible keyed hash
-  (`shared/hash.ts`). Raw comment text is auto-deleted at 30 days. A commenter erasure request is
-  therefore satisfied by (a) the standing 30-day raw-text purge, and (b) on request, deleting the
-  specific account's comment rows whose hash matches a handle the requester supplies (the requester
-  proves the handle; we re-hash it with the same key to locate rows). No identity index is retained.
-- **Audit of erasure**: `purge_expired_data` returns counts (`raw_text_purged`,
-  `revoked_posts_deleted`, `raw_payloads_purged`) logged per run for accountability.
+### Residual risk and ownership
 
-## Auditability
-- OpenRouter retains a request log of model calls; Edge Functions emit structured logs (no
-  secrets, no raw handles). Daily `retention-purge` output is logged as the deletion record.
+The residual risk is primarily **political** — an opposition complaint — rather than a clean legal
+prohibition on public-data scraping. That risk, plus any ToS-breach exposure, is **explicit and
+founder/tenant-owned, per jurisdiction**. Each tenant accepts the posture for its own jurisdiction.
+Undocumented risk is unowned risk; this file is where it is owned.
 
-## Retention windows
-- **Raw comment text**: 30 days (FR-009), enforced by `purge_expired_data`.
-- **Raw-payload Storage objects** (if archival enabled): 30 days, enforced by `retention-purge`.
-- **Anonymized derivatives** (hashed IDs, narratives, trends, metrics): retained for the engagement
-  (no fixed TTL) — they carry no identity.
-- **OAuth state**: ~1 hour. **Revoked-account content**: purged on the next daily run.
-- **Review owner**: **party legal** signs off these windows for the specific deployment before
-  production (external; the 30-day defaults are the design baseline, configurable if legal requires).
+---
+
+## India / DPDP profile (`IN-DPDP`) — shipped
+
+The launch profile. Posture: **publicly-available, minimise & anonymise, in-country**.
+
+### "Publicly available" posture
+The DPDP Act exempts personal data that the Data Principal has **made publicly available**. Opposition
+cadre posting on public accounts is the basis the profile relies on. The platform reinforces this by
+holding the absolute minimum and never crossing into private data (Principle II).
+
+### Significant-Data-Fiduciary / electoral-risk awareness
+Election-adjacent political processing is sensitive and may attract Significant-Data-Fiduciary-style
+scrutiny. The profile is built to support that posture: minimisation by default, documented retention,
+auditable purge, and a hard gate on raw identity. Naming a Grievance Officer and a Data Protection
+Officer in the tenant's privacy notice is a **tenant-owned** (not codeable) obligation.
+
+### Data residency — in-country
+The Supabase project is created in an **India region** (e.g. `ap-south-1` / Mumbai); personal data is
+pinned in-country at rest (`config.toml` header; verified at provisioning, see `docs/deploy.md` §1).
+
+### 30-day raw-text retention
+Raw text — `post.caption` and `comment.body` — is purged **30 days** after ingestion by the
+`retention-purge` function (scheduled hourly via `pg_cron`, migration `0005_cron.sql`), configurable
+per jurisdiction. Anonymised / derived data — author hashes, embeddings, narrative and metric
+time-series — carries no identity and is retained for the engagement.
+
+### Comment authors HMAC-hashed at ingest
+Comment author identity is stored only as a **keyed HMAC** (`shared/hash.ts`, keyed by
+`COMMENTER_HASH_KEY`), computed **before** insert; the raw handle is never persisted by default. The
+stable hash still allows same-actor-across-targets detection (the author-network coordination signal)
+without ever holding an identity. Rotating the key breaks historical hash continuity by design.
+
+### Raw-identity mode — gated OFF
+A raw-identity comment mode exists only as a per-tenant, jurisdiction-gated, **off-by-default** flag
+(`tenant.raw_identity_enabled`). `comment.author_raw` is populated **only** when that flag is true
+**and** the jurisdiction profile permits it; otherwise the column stays null and only `author_hash`
+exists. The `IN-DPDP` profile keeps it off.
+
+### No raw-media warehousing
+The media worker fetches CDN media, emits `media_transcript` text, and discards the bytes. `media_url`
+is stored transiently and cleared as soon as a transcript is emitted. No image or video byte is ever
+persisted.
+
+### External processing (LLM + embeddings)
+Only **derived text** — caption/transcript/comment body — is sent to OpenRouter → Gemini and the
+Gemini embedding endpoint; never the author hash, account, tenant, or any join key, so the provider
+cannot reconstruct a profile. Prefer an India-region inference path where available. Accepting the
+provider DPAs (no-training / retention terms) and recording the processing region is a **tenant-owned
+external sign-off** before production with real data.
+
+---
+
+## How the multi-jurisdiction config generalises
+
+The per-tenant `jurisdiction` key selects a profile that parameterises the same machinery:
+
+| Knob | `IN-DPDP` (shipped) | Stricter profile, e.g. `EU-GDPR` (representable, **not enabled**) |
+|---|---|---|
+| Legal basis for opposition data | "publicly available" exemption | Political opinion is **special-category** (Art. 9); the "publicly available" route narrows, and some targets may be **out of bounds** entirely |
+| Raw-text retention | 30 days | Likely shorter; stricter purpose-limitation |
+| Raw-identity mode | gated OFF | forbidden by profile |
+| Residency | India region | EU region |
+| Risk owner | tenant (India) | tenant (EU) |
+
+The config is *shaped* to express the stricter profile so no code changes when a new jurisdiction is
+enabled — but only `IN-DPDP` is on at launch (Principle VIII). A stricter profile may render targets
+that are fair game under `IN-DPDP` out-of-bounds; the in-bounds-target rule is part of the profile.
+
+---
+
+## Data Principal rights (DPDP)
+
+- **Grievance / DPO contact** — the tenant publishes a Grievance Officer + DPO in its privacy notice.
+  Tenant-owned, per deployment; not code.
+- **Erasure** — commenter identities are not stored (only a non-reversible keyed hash), and raw text
+  auto-deletes at 30 days, so a commenter erasure request is largely satisfied standing. On request, a
+  requester who proves a handle can have its matching `author_hash` rows deleted (we re-hash the
+  supplied handle with the same key to locate rows). No identity index is retained.
+- **Audit of erasure** — `retention-purge` logs deletion counts per run as the deletion record.
+
+---
 
 ## External sign-offs (cannot be closed in code — owner + status)
-These remain genuinely external. They are tracked, not codeable:
-- [ ] **LLM/embedding provider DPA** accepted & processing region recorded — owner: party DPO + vendor.
-- [ ] **Grievance Officer** named and published in the privacy notice — owner: party.
-- [ ] **Legal review** of retention windows for this deployment — owner: party legal.
-- [ ] **YouTube Data API quota audit** approved (Principle VII) — owner: party + Google;
-  see `docs/quota-audit.md`. Code-side gate already enforced (`YT_INGEST_ENABLED`).
+
+These remain genuinely external; they are tracked, not codeable:
+
+- [ ] **Jurisdiction profile accepted** for this tenant, residual political/ToS risk acknowledged —
+  owner: **founder + tenant**.
+- [ ] **LLM/embedding provider DPA** accepted and processing region recorded — owner: **tenant DPO + vendor**.
+- [ ] **Grievance Officer + DPO** named and published in the privacy notice — owner: **tenant**.
+- [ ] **Legal review** of retention windows for this deployment — owner: **tenant legal**.
+- [ ] **Region confirmed** matching the jurisdiction profile at provisioning — owner: **deployer**.
+
+---
+
+*This document maps the build to the constitution (Principles II, III, VIII). It is a compliance
+posture and risk register, not legal advice. Each tenant owns the legal call for its jurisdiction.*

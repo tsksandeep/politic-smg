@@ -15,6 +15,9 @@ import { ENDPOINTS } from "./endpoints.ts";
 const OPENROUTER_URL = `${ENDPOINTS.openRouter}/chat/completions`;
 const API_KEY = Deno.env.get("OPENROUTER_API_KEY") ?? "";
 const JSON_MODE = Deno.env.get("LLM_RESPONSE_FORMAT") ?? "json_object";
+// Hard timeout so a slow/stuck model never hangs a queue worker indefinitely (the message just
+// fails and retries, then DLQs). Tune via LLM_TIMEOUT_MS; default 60s.
+const TIMEOUT_MS = Number(Deno.env.get("LLM_TIMEOUT_MS") ?? "60000");
 
 export type Tier = "bulk" | "nuanced";
 
@@ -52,19 +55,32 @@ export async function chat(prompt: string, opts: ChatOptions): Promise<string> {
     ...(system ? [{ role: "system", content: system }] : []),
     { role: "user", content: prompt },
   ];
-  const res = await fetch(OPENROUTER_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(API_KEY ? { "Authorization": `Bearer ${API_KEY}` } : {}),
-    },
-    body: JSON.stringify({
-      model: MODEL[opts.tier],
-      messages,
-      temperature: opts.temperature ?? 0.2,
-      ...(nativeJson ? { response_format: { type: "json_object" } } : {}),
-    }),
-  });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(OPENROUTER_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(API_KEY ? { "Authorization": `Bearer ${API_KEY}` } : {}),
+      },
+      body: JSON.stringify({
+        model: MODEL[opts.tier],
+        messages,
+        temperature: opts.temperature ?? 0.2,
+        ...(nativeJson ? { response_format: { type: "json_object" } } : {}),
+      }),
+      signal: ctrl.signal,
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") {
+      throw new Error(`LLM ${opts.tier} timed out after ${TIMEOUT_MS}ms`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     throw new Error(`LLM ${opts.tier} error ${res.status}: ${await res.text()}`);
   }

@@ -57,7 +57,8 @@ body { font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif; background:
 
 /* =====================================================================
    App (dashboard) shell — shared LIGHT theme (white surfaces, slate text, ember accent).
-   Used by Board / AlertDetail / Onboarding via <AppShell>. Tokens live in theme.ts.
+   Used by the war-room pages (NarrativeBoard / Alerts / Coordination / Coverage / Admin / detail
+   pages) via <AppShell>. Tokens live in theme.ts.
    (The public Landing hero stays dark and owns its own styles.)
    ===================================================================== */
 .app-shell {
@@ -196,6 +197,39 @@ body { font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif; background:
 
 /* Keyboard focus for sidebar nav */
 .nav-link:focus-visible { outline: 2px solid #D6492E; outline-offset: 2px; }
+
+/* Coverage: responsive stat-card grid (scaling-law view) */
+.coverage-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+
+/* Sort / filter tabs (board, alerts, coordination, amplifiers) */
+.sort-tab {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px; letter-spacing: 0.06em; text-transform: lowercase;
+  color: #64748B; background: transparent; border: 1px solid transparent;
+  border-radius: 9999px; padding: 5px 12px; cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+}
+.sort-tab:hover { background: #F1F3F5; color: #0F172A; }
+.sort-tab[data-active="true"] { color: #BE3C22; background: rgba(214,73,46,0.08); border-color: rgba(214,73,46,0.30); }
+.sort-tab:focus-visible { outline: 2px solid #D6492E; outline-offset: 2px; }
+
+/* Admin tables */
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tbl th {
+  text-align: left; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #64748B;
+  font-weight: 600; padding: 8px 10px; border-bottom: 1px solid #E4E7EB;
+}
+.tbl td { padding: 10px; border-bottom: 1px solid #F1F3F5; color: #0F172A; }
+.tbl tr:last-child td { border-bottom: none; }
+.link-danger {
+  background: none; border: none; cursor: pointer; padding: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px; color: #DC2626; transition: opacity .15s;
+}
+.link-danger:hover { opacity: 0.7; }
+
+/* Native selects share the .field look */
+select.field { appearance: none; -webkit-appearance: none; background-image: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .card-link:hover { transform: none; }

@@ -1,0 +1,10 @@
+# media-worker runtime deps (Python 3.13)
+
+# Always required: queue RPCs + CDN fetch + hosted OpenRouter/Vertex calls.
+httpx==0.27.2
+
+# Local fallback (MEDIA_PROVIDER=local). Safe to keep installed; imported lazily in providers.py.
+# Remove these two lines for a slim gemini-only image (also drop tesseract from the Dockerfile).
+pytesseract==0.3.13
+pillow==11.0.0
+faster-whisper==1.0.3

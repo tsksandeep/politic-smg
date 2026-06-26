@@ -1,54 +1,110 @@
-// coordination_test.ts (FR-003 + edge case "single loud critic vs coordination") — a burst from
-// MANY distinct commenters reads as highly coordinated; the same volume from ONE prolific critic
-// does not. The coordination signal must distinguish them.
-// Integration test against a local supabase db (guarded by DATABASE_URL).
+// tests/coordination_test.ts — inferred coordination detection (FR-011, SC-006).
+// Seeds a synchronised burst for tenant A: >= coordination_min_accounts distinct tracked accounts
+// each dropping a post in-window that SHARES one reel audio_id AND an identical hashtag. Calls
+// detect_coordination() and asserts a coordination_signal of the right type names the contributing
+// account_ids and that a coordinated_attack alert is raised. A single isolated post (tenant B) must
+// NOT trip anything.
+//
+// Run:  deno test --allow-net --allow-env coordination_test.ts
 
-import { assert } from "std/assert/mod.ts";
+import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { connect, createTenant, createTrackedAccount, q, uuid } from "./helpers.ts";
 
-const VEC = "[" + Array(768).fill(0).map((_, i) => (i === 0 ? 1 : 0)).join(",") + "]";
+Deno.test("coordination — shared-audio + identical-hashtag burst trips; isolated post does not", async (t) => {
+  const client = await connect();
+  try {
+    const MIN = 4;
+    const tenantA = await createTenant(client, {
+      coordination_window: "30 minutes",
+      coordination_min_accounts: MIN,
+    });
+    const tenantB = await createTenant(client, {
+      coordination_window: "30 minutes",
+      coordination_min_accounts: MIN,
+    });
 
-Deno.test({
-  name: "coordination: many distinct commenters score high; one prolific critic scores low",
-  ignore: !Deno.env.get("DATABASE_URL"),
-  fn: async () => {
-    const postgres = (await import("npm:postgres@3")).default;
-    const sql = postgres(Deno.env.get("DATABASE_URL")!);
-
-    // Seed a hostile burst whose comments share an embedding (one narrative), with the given
-    // commenter hashes, then return the resulting anti-party coordination score.
-    const burstScore = async (hashes: string[]): Promise<number> => {
-      await sql`truncate cadre, connected_account, post, comment, narrative, alert restart identity cascade`;
-      const [cadre] = await sql`insert into cadre (display_name) values ('coord') returning id`;
-      const [acct] = await sql`
-        insert into connected_account (cadre_id, platform, external_id, token_ref)
-        values (${cadre.id}, 'instagram', ${"acc-" + crypto.randomUUID()}, 'ref') returning id`;
-      const [post] = await sql`
-        insert into post (connected_account_id, platform_post_id)
-        values (${acct.id}, ${"p-" + crypto.randomUUID()}) returning id`;
-      for (const h of hashes) {
-        await sql`
-          insert into comment (post_id, commenter_hash, body, sentiment, sentiment_confidence, language, embedding)
-          values (${post.id}, ${h}, 'corruption corruption', 'hostile', 0.9, 'en', ${VEC}::vector)`;
-      }
-      await sql`select run_detection()`;
-      const [row] = await sql`
-        select coalesce(max(coordination_score), 0)::float as score
-        from narrative where stance = 'anti_party'`;
-      return row.score as number;
-    };
-
-    try {
-      // 40 comments from 40 distinct commenters → coordinated.
-      const many = await burstScore(Array.from({ length: 40 }, (_, i) => "c" + i));
-      assert(many >= 0.9, `many-commenter burst is coordinated (score=${many})`);
-
-      // 40 comments from a SINGLE commenter → not coordination, just one loud critic.
-      const one = await burstScore(Array.from({ length: 40 }, () => "lone_critic"));
-      assert(one <= 0.5, `single-critic burst is not coordinated (score=${one})`);
-
-      assert(many > one, "coordination signal separates a swarm from a lone critic");
-    } finally {
-      await sql.end();
+    // ---- Tenant A: 5 distinct accounts, same audio_id + same hashtag, all just now ----
+    const SHARED_AUDIO = "audio_burst_xyz";
+    const HASHTAG = "#voteforchange";
+    const accountIds: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const acc = await createTrackedAccount(client, tenantA, `cadre_a_${i}`);
+      accountIds.push(acc);
+      const postId = uuid();
+      await q(client, {
+        text: `insert into post
+          (id, tenant_id, tracked_account_id, shortcode, audio_id, taken_at, first_seen_at)
+          values ($1,$2,$3,$4,$5, now(), now())`,
+        args: [postId, tenantA, acc, "burst-" + uuid().slice(0, 8), SHARED_AUDIO],
+      });
+      await q(client, {
+        text: `insert into post_entity (tenant_id, post_id, kind, value) values ($1,$2,'hashtag',$3)`,
+        args: [tenantA, postId, HASHTAG],
+      });
     }
-  },
+
+    // ---- Tenant B: a single isolated post (its own audio + hashtag) ----
+    const accB = await createTrackedAccount(client, tenantB, "lonely_b");
+    const soloPost = uuid();
+    await q(client, {
+      text: `insert into post
+        (id, tenant_id, tracked_account_id, shortcode, audio_id, taken_at, first_seen_at)
+        values ($1,$2,$3,$4,'audio_solo', now(), now())`,
+      args: [soloPost, tenantB, accB, "solo-" + uuid().slice(0, 8)],
+    });
+    await q(client, {
+      text: `insert into post_entity (tenant_id, post_id, kind, value) values ($1,$2,'hashtag','#solo')`,
+      args: [tenantB, soloPost],
+    });
+
+    // ---- Run coordination detection ----
+    await q(client, { text: `select detect_coordination()` });
+
+    await t.step("shared_audio signal names the contributing accounts", async () => {
+      const r = await q(client, {
+        text: `select account_ids, score from coordination_signal
+                where tenant_id=$1 and signal_type='shared_audio'`,
+        args: [tenantA],
+      }) as { rows: { account_ids: string[]; score: number }[] };
+      assert(r.rows.length >= 1, "no shared_audio coordination_signal was produced");
+      const sig = r.rows[0];
+      assert(sig.account_ids.length >= MIN, `too few contributing accounts: ${sig.account_ids.length}`);
+      for (const id of accountIds) {
+        assert(sig.account_ids.includes(id), `account ${id} missing from coordination signal`);
+      }
+      assert(sig.score >= 0.5, `coordination score below alert threshold: ${sig.score}`);
+    });
+
+    await t.step("identical-hashtag content signal also raised", async () => {
+      const n = await q(client, {
+        text: `select count(*)::int as n from coordination_signal
+                where tenant_id=$1 and signal_type='content'`,
+        args: [tenantA],
+      }) as { rows: { n: number }[] };
+      assert(n.rows[0].n >= 1, "no content (identical-hashtag) coordination signal was produced");
+    });
+
+    await t.step("coordinated_attack alert raised", async () => {
+      const a = await q(client, {
+        text: `select count(*)::int as n from alert where tenant_id=$1 and kind='coordinated_attack'`,
+        args: [tenantA],
+      }) as { rows: { n: number }[] };
+      assert(a.rows[0].n >= 1, "no coordinated_attack alert was raised for the burst");
+    });
+
+    await t.step("isolated single post does NOT trip coordination (SC-006)", async () => {
+      const sig = await q(client, {
+        text: `select count(*)::int as n from coordination_signal where tenant_id=$1`,
+        args: [tenantB],
+      }) as { rows: { n: number }[] };
+      assertEquals(sig.rows[0].n, 0, "an isolated post wrongly produced a coordination signal");
+      const alert = await q(client, {
+        text: `select count(*)::int as n from alert where tenant_id=$1 and kind='coordinated_attack'`,
+        args: [tenantB],
+      }) as { rows: { n: number }[] };
+      assertEquals(alert.rows[0].n, 0, "an isolated post wrongly raised a coordinated_attack alert");
+    });
+  } finally {
+    await client.end();
+  }
 });

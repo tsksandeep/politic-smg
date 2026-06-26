@@ -1,0 +1,31 @@
+# docker-compose snippet for the always-on media-worker.
+#   docker compose up -d --build media-worker
+#
+# Reads the same Supabase service-role key the other backend components use. Secrets come from a
+# .env file (never committed) or your orchestrator's secret store.
+services:
+  media-worker:
+    build: .
+    restart: always
+    env_file: .env
+    environment:
+      # --- required ---
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # --- OCR/ASR provider: "gemini" (hosted, default) or "local" (tesseract + faster-whisper) ---
+      MEDIA_PROVIDER: ${MEDIA_PROVIDER:-gemini}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL_VISION: ${OPENROUTER_MODEL_VISION:-google/gemini-2.5-flash}
+      OPENROUTER_MODEL_AUDIO: ${OPENROUTER_MODEL_AUDIO:-google/gemini-2.5-flash}
+      # --- transcript embedding: "none" (default, leave NULL) | "vertex" | "openai" ---
+      EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-none}
+      # --- tuning ---
+      MEDIA_BATCH: ${MEDIA_BATCH:-8}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-5}
+    # Ephemeral media-derived temp files live here for the duration of one transcription only;
+    # tmpfs keeps them off any persistent disk (defence-in-depth for Principle III).
+    tmpfs:
+      - /tmp:size=512m
+    # Single replica is fine; pgmq visibility timeout makes the queue safe to scale horizontally.
+    deploy:
+      replicas: 1

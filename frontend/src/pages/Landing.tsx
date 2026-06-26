@@ -27,7 +27,7 @@ export default function Landing() {
 
   // Single-tenant gated entry. Real auth is a Supabase magic link (OTP) to the party email.
   // The Supabase client is imported lazily on submit so this public landing chunk renders
-  // without VITE_SUPABASE_* at module load. The link returns the user to /board, where
+  // without VITE_SUPABASE_* at module load. The link returns the user to /narratives, where
   // RequireAuth completes the session from the URL.
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -39,7 +39,7 @@ export default function Landing() {
         email: email.trim(),
         // Invite-only: never create a user from the public page; only provisioned party
         // users receive a login link (unknown emails are silently rejected server-side).
-        options: { emailRedirectTo: `${window.location.origin}/board`, shouldCreateUser: false },
+        options: { emailRedirectTo: `${window.location.origin}/narratives`, shouldCreateUser: false },
       });
       setStatus(error ? "error" : "sent");
     } catch {
@@ -351,8 +351,8 @@ export default function Landing() {
               textShadow: "0 2px 40px rgba(0,0,0,0.55)",
             }}
           >
-            <span style={{ color: EMBER }}>Centralised</span> narrative efficiency tracking of party
-            cadres&rsquo; social media accounts.
+            <span style={{ color: EMBER }}>Opposition</span> narrative intelligence — what they push,
+            how it moves, who amplifies it.
           </h1>
         </div>
 
@@ -381,7 +381,7 @@ export default function Landing() {
               textTransform: "uppercase",
             }}
           >
-            Single-tenant · India data residency · Consent-only observability
+            Multi-tenant · India data residency · Public-data-only, logged-out
           </span>
           <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
             <a href="#" className="footlink" style={footLink}>

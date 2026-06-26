@@ -1,16 +1,19 @@
-# Deploy & Validate Runbook — Politic-SMG (single tenant)
+# Deploy & Validate Runbook
 
-How to stand up one party's tenant and validate the US1 rapid-response wedge. This moves the
-"written but unrun" code to "running and validated". One Supabase project **per party**.
+How to stand up an OpenPolitics deployment and validate it end-to-end. One shared-schema Supabase
+project holds all tenants, isolated by `tenant_id` + RLS (Principle I). The hosted project's
+**region is set per the tenant jurisdiction profile** — the launch `IN-DPDP` profile pins an India
+region (Principle VIII).
 
-Prereqs on your machine: `supabase` CLI (≥2.39), `deno` (≥2.4), `node` (≥20), `git`.
+Prereqs on your machine: `supabase` CLI (≥2.39), `deno` (≥2.4), `node` (≥20), Docker, `git`.
 
 ---
 
-## 1. Provision the Supabase project (India region — Principle III)
+## 1. Provision the Supabase project (region per jurisdiction)
 
-1. Create a new project in the Supabase dashboard. **Region MUST be an India region**
-   (e.g. `ap-south-1` / Mumbai). Note the project ref and DB password.
+1. Create a project in the Supabase dashboard. **Region MUST match the launch jurisdiction** — for
+   `IN-DPDP` an **India region** (e.g. `ap-south-1` / Mumbai), so personal data stays in-country.
+   Note the project ref and DB password.
 2. Authenticate and link the CLI:
    ```bash
    supabase login
@@ -21,161 +24,168 @@ Prereqs on your machine: `supabase` CLI (≥2.39), `deno` (≥2.4), `node` (≥2
 
 ```bash
 cd backend/supabase
-supabase db push        # applies migrations/0001..0016 in order
+supabase db push        # applies migrations/0001..0007 in order
 ```
-This creates the schema, pgvector columns + HNSW indexes, RLS policies, Auth role trigger,
-pgmq queues + queue wrappers (0014), pg_cron jobs (authenticated invocation — 0010), the
-alert_board / narrative_board / cadre_* views, the detection + retention functions, the
-favourable + coverage views (0012–0013), and the Nango account columns (0016, which also drops
-the old Vault token functions from 0008/0011). Adds `alert` + `narrative` to the Realtime
-publication (0012).
+This creates, in order:
 
-> The embedding dimension is **768** (migration 0002 + `shared/embeddings.ts`). If you switch
+| Migration | Brings up |
+|---|---|
+| `0001_schema.sql` | Multi-tenant tables (tenant, node, tracked_account, work_assignment, submission, post, comment, narrative, …) — every tenant row carries `tenant_id`. |
+| `0002_vector.sql` | pgvector columns + HNSW indexes (768-dim) on captions, transcripts, comments. |
+| `0003_rls.sql` | Row-level security: tenant isolation + Admin/Analyst least privilege; default deny. |
+| `0004_queues.sql` | pgmq `enrich_jobs` / `media_jobs` / `reconcile_jobs` (+ DLQs) and claim/complete/fail RPCs. |
+| `0005_cron.sql` | `app_config` (service-role-only), `invoke_function()`, and the `pg_cron` schedule. |
+| `0006_views.sql` | Tenant-scoped read surfaces (`security_invoker = on`): narrative_board, coordination_board, amplifier_targets, alert_board, node_coverage. |
+| `0007_detection.sql` | The analytics SQL: clustering, lifecycle, coordination, reconciliation + node trust. |
+
+> The embedding dimension is **768** (`0002_vector.sql` + `shared/embeddings.ts`). If you switch
 > embedding models, change BOTH together.
 
-## 3. Verify Realtime on the alert + narrative tables
-
-The war-room board subscribes to `alert` and `narrative` changes (FR-006). Migration **0012**
-already adds both to the `supabase_realtime` publication, so no manual step is needed — just
-confirm it applied on the hosted project:
-```sql
-select tablename from pg_publication_tables
-where pubname = 'supabase_realtime' and tablename in ('alert','narrative');
-```
-(Expect both rows. If missing: `alter publication supabase_realtime add table alert, narrative;`)
-
-## 4. Configure secrets (never in code — see docs/secrets.md)
-
-First stand up **Nango** (self-hosted, India region): register the `instagram` + `youtube`
-integrations with the real Facebook/Google client id+secret, and copy its environment Secret Key.
+## 3. Configure secrets (never in code — see docs/secrets.md)
 
 ```bash
 supabase secrets set \
+  COMMENTER_HASH_KEY="$(openssl rand -hex 32)" \
+  NODE_TOKEN_KEY="$(openssl rand -hex 32)" \
+  NODE_ENROLMENT_SECRET="$(openssl rand -hex 32)" \
   OPENROUTER_API_KEY=... \
+  EMBEDDINGS_PROVIDER=vertex \
   VERTEX_EMBEDDINGS_URL="https://asia-south1-aiplatform.googleapis.com/v1/projects/<p>/locations/asia-south1/publishers/google/models/gemini-embedding-001:predict" \
   VERTEX_SA_EMAIL=... VERTEX_SA_PRIVATE_KEY="..." \
-  NANGO_HOST="https://<your-nango-host>" NANGO_SECRET_KEY=... \
-  IG_APP_SECRET=... IG_WEBHOOK_VERIFY_TOKEN=... \
-  COMMENTER_HASH_KEY="$(openssl rand -hex 32)" \
-  FUNCTIONS_BASE_URL="https://<project-ref>.functions.supabase.co" \
   FRONTEND_ORIGIN="https://<your-deployed-frontend-origin>"
 ```
-- `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are injected into Edge
-  Functions automatically by the platform.
-- Cadre OAuth + token storage/refresh is handled by **Nango** (the app only needs `NANGO_HOST` +
-  `NANGO_SECRET_KEY`); platform OAuth client creds live inside Nango, not here.
-- `FUNCTIONS_BASE_URL` is the inter-function call base (oauth-callback → backfill).
-- `FRONTEND_ORIGIN` is **required in production**: it is the CORS allow-origin for the SPA→function
-  calls (including the SPA's POST to `oauth-callback` after the Nango Connect flow). If unset it
-  defaults to `*`, which you do not want in production.
 
-## 5. Wire pg_cron → Edge Functions
+- `COMMENTER_HASH_KEY` — keyed HMAC for comment-author hashing at ingest (Principle III). Rotating it
+  breaks historical hash continuity by design.
+- `NODE_TOKEN_KEY` — keyed HMAC used to derive/verify `node.token_hash`; raw node tokens are never
+  stored.
+- `NODE_ENROLMENT_SECRET` — signs/validates tenant enrolment codes consumed by `node-register`.
+- `OPENROUTER_API_KEY` + the `EMBEDDINGS_*` / `VERTEX_*` block — LLM classification/synthesis and
+  embeddings. Prefer an India-region embedding path for `IN-DPDP`.
+- `FRONTEND_ORIGIN` — **required in production**: CORS allow-origin for SPA→function calls.
+- `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` are injected into Edge Functions by
+  the platform automatically.
 
-The cron jobs invoke functions over authenticated HTTP (migration 0010). Set **both** the base
-URL and the service-role key, or every scheduled job (analyze/detect/ingest/purge) is
-skipped or rejected:
+## 4. Wire pg_cron → Edge Functions (`app_config`)
+
+The scheduled pipeline (`0005_cron.sql`) calls each function over authenticated HTTP via
+`invoke_function()`, which reads two service-role-only rows from `app_config`. Set **both**, or every
+scheduled job is skipped:
+
 ```sql
--- Base URL (persists across sessions):
-alter database postgres set app.functions_base_url = 'https://<project-ref>.functions.supabase.co';
-
--- Service-role key in Vault — sent as the Bearer so the gateway's verify_jwt check passes
--- (analyze-comments, detect-narratives, ingest-youtube, retention-purge):
-select vault.create_secret('<SERVICE_ROLE_KEY>', 'service_role_key');
+insert into app_config(key, value) values
+  ('functions_base_url', 'https://<project-ref>.functions.supabase.co'),
+  ('cron_service_key',   '<SERVICE_ROLE_KEY>')
+on conflict (key) do update set value = excluded.value;
 ```
-> `ig-webhook` and `oauth-callback` are public (no JWT) and are declared `verify_jwt = false`
-> in `config.toml`; the dashboard's function settings must match (disable "Enforce JWT").
 
-## 6. Deploy Edge Functions
+The schedule covers `assign-work`, `enrich`, `media-dispatch`, `detect-narratives`,
+`coordination-detect`, `reconcile`, and `retention-purge`.
+
+## 5. Deploy Edge Functions
 
 ```bash
-# Detection pipeline + war-room API:
-supabase functions deploy analyze-comments
+# Coordinator (node-token auth — verify_jwt = false, see config.toml):
+supabase functions deploy node-register --no-verify-jwt
+supabase functions deploy work-lease    --no-verify-jwt
+supabase functions deploy submit        --no-verify-jwt
+supabase functions deploy heartbeat     --no-verify-jwt
+
+# Pipeline (invoked by pg_cron with the service-role bearer):
+supabase functions deploy enrich
 supabase functions deploy detect-narratives
-supabase functions deploy detection-settings
-supabase functions deploy alert-detail
+supabase functions deploy coordination-detect
+supabase functions deploy assign-work
+supabase functions deploy reconcile
+supabase functions deploy retention-purge      # data-minimisation gate — must be live before real data
+
+# War-room API (signed-in user JWT + RLS):
 supabase functions deploy alert-triage
-# Onboarding / consent (US2):
-supabase functions deploy oauth-start
-supabase functions deploy oauth-callback     # public: set Enforce-JWT = off (config.toml verify_jwt=false)
-supabase functions deploy accounts
-supabase functions deploy account-revoke
-supabase functions deploy backfill
-# Ingestion + retention:
-supabase functions deploy ig-webhook         # public: set Enforce-JWT = off (config.toml verify_jwt=false)
-supabase functions deploy retention-purge    # LAUNCH-BLOCKING — must be live before real data
-# YouTube path — deploy only after the quota audit is approved (docs/quota-audit.md):
-# supabase functions deploy ingest-youtube    # also requires YT_INGEST_ENABLED=true
+supabase functions deploy detection-settings
 ```
 
-## 7. Create the first Admin
+> The four coordinator functions MUST have JWT enforcement **off** (nodes carry no Supabase JWT; each
+> verifies its own tenant-scoped node token by HMAC-matching `node.token_hash`). This matches
+> `verify_jwt = false` in `config.toml`; confirm it in the dashboard's function settings.
 
-1. Create a user (dashboard → Authentication → Add user, or admin API). The Auth trigger
-   (migration 0004) mirrors them into `app_user` as `analyst`.
-2. Promote to admin (SQL editor):
-   ```sql
-   update app_user set role = 'admin'
-   where id = (select id from auth.users where email = 'admin@party.example');
-   ```
+## 6. Run the media worker
 
-## 8. Register the Instagram webhook
+The media worker cannot run inside Edge Functions (it needs a heavy OCR/ASR runtime). Run it as an
+always-on container near the database:
 
-In the Meta app dashboard, subscribe the app to Instagram `comments` webhooks pointing at
-`https://<project-ref>.functions.supabase.co/ig-webhook`, using `IG_WEBHOOK_VERIFY_TOKEN`.
+```bash
+cd backend/media-worker
+# Provide DB access + LLM/ASR config via the container env, then:
+docker compose up -d        # consumes media_jobs → OCR/ASR → writes media_transcript → discards bytes
+```
 
-## 9. Run the frontend
+It drains `media_jobs`, writes `media_transcript`, and clears `post.media_url` once a transcript is
+emitted — raw media bytes are never warehoused (Principle III).
+
+## 7. Distribute the node extension (self-hosted enterprise install)
+
+The MV3 node client is distributed by **self-hosted enterprise install**, not a public store:
+
+1. Build `extension/` for the target browser (Chromium/Firefox).
+2. Host the packaged extension + update manifest on the tenant's own server.
+3. Push it to volunteer machines via enterprise policy (e.g. `ExtensionInstallForcelist` /
+   `ExtensionSettings`).
+4. A tenant Admin issues a **tenant enrolment code**; each operator registers their node once (see
+   `docs/node-network.md`). The node calls `node-register` with the code and receives its node token
+   (shown once, stored thereafter only as a hash).
+
+## 8. Create the first tenant + Admin
+
+1. Seed a tenant row (jurisdiction `IN-DPDP`) and an enrolment code.
+2. Create the Admin auth user (dashboard → Authentication → Add user, signups are off) and map it to
+   the tenant in `tenant_user` with `role = 'admin'`. The Admin manages users, nodes, the target
+   list, and detection thresholds; the JWT `tenant_id` claim drives `current_tenant()` for RLS.
+
+## 9. Run the war-room frontend
 
 ```bash
 cd ../../frontend
 cp .env.example .env     # fill VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY
 npm install && npm run dev
 ```
-Sign in from the landing hero: enter the Admin's party email → a Supabase magic link is sent
-(`signInWithOtp`) → it returns to `/board`, where `RequireAuth` establishes the session.
-
-> For magic-link auth to work on the **hosted** frontend, set the deployed origin in
-> `config.toml` `[auth] site_url` + `additional_redirect_urls` (and the dashboard Auth URL
-> config), and set the function secret `FRONTEND_ORIGIN` to that same origin (§4).
+Sign in from the landing hero with the Admin's email. For magic-link auth on a hosted frontend, set
+the deployed origin in `config.toml` `[auth] site_url` + `additional_redirect_urls`, and set the
+`FRONTEND_ORIGIN` function secret to the same origin (§3).
 
 ---
 
-## Validate the wedge
+## Validate
 
-### Fast path — demo without external APIs (recommended first)
-Seed a synthetic hostile burst (pre-embedded, so no Gemini call needed) and run detection:
+### Fast path — seed + pipeline without live capture
 ```bash
-psql "$DATABASE_URL" -f backend/supabase/seed/demo_burst.sql
-psql "$DATABASE_URL" -c "select run_detection();"
+psql "$DATABASE_URL" -f backend/supabase/seed/demo_tenant.sql   # two tenants, nodes, captured posts,
+                                                                # a coordination burst on tenant A
+make pipeline                                                   # enrich → detect-narratives →
+                                                                # coordination-detect → assign-work → reconcile
 ```
-Then watch `/board` — an alert should appear live (Realtime). This exercises detection →
-alert → board → anonymized detail end-to-end (quickstart **V1**, minus live ingestion).
+Then sign in as a tenant-A Analyst: the narrative board shows labelled clusters with lifecycle, the
+coordination card shows the inferred signal from the seeded burst, the amplifier list ranks accounts,
+and the node-coverage view shows the scaling-law picture. Sign in as tenant B and confirm **none** of
+tenant A's data is visible (Principle I).
 
-### Full path
-Follow `specs/001-rapid-response/quickstart.md` scenarios **V1–V5** against real connected
-accounts (V2 onboarding requires US2, not yet built).
+### Simulate a node
+Register a node with an enrolment code, lease work, submit a capture, and heartbeat — see
+`specs/001-opposition-intel/quickstart.md` §2 and `docs/local-dev.md`.
 
-### Run the test suite
+### Run the tests
 ```bash
-# Deno tests (DB-backed ones activate when DATABASE_URL is set):
-cd backend/supabase
-DATABASE_URL="postgresql://postgres:<pw>@db.<ref>.supabase.co:5432/postgres" \
-  deno test --allow-env --allow-net --allow-read tests/
-
-# pgTAP RLS test:
-pg_prove -d "$DATABASE_URL" tests/rls_settings_test.sql
+make test     # Deno + pgTAP: RLS tenant-isolation property (SC-001), reconciliation/trust,
+              # detection, coordination (SC-006), enrich queue, retention purge (SC-005)
 ```
 
 ---
 
-## Launch gates (must close before real data — Principle III / VII)
-- [x] **T045** retention-purge function implemented + scheduled (raw text deleted at 30 days).
-- [ ] **T046** India residency confirmed; DPDP retention/lawful-basis documented.
-- [ ] **T047** YouTube quota audit approved (or YouTube path left disabled, Instagram-only).
+## Launch gates (must close before real data)
 
-### Wiring checklist (close before the pipeline runs end-to-end)
-- [ ] `app.functions_base_url` set, and `service_role_key` stored in Vault (§5) — else **no cron
-      job runs** (analyze/detect/ingest/purge all skip).
-- [ ] `FRONTEND_ORIGIN` function secret set to the deployed SPA origin (§4) — else SPA→function
-      calls (including the post-consent POST to `oauth-callback`) are CORS-blocked off-laptop.
-- [ ] `ig-webhook` and `oauth-callback` have Enforce-JWT disabled in the dashboard (§6).
-- [ ] Realtime confirmed on `alert` + `narrative` (§3, applied by migration 0012) — else the
-      board doesn't update live.
+- [ ] **Region** matches the jurisdiction profile (India for `IN-DPDP`) — §1.
+- [ ] **`retention-purge`** deployed + scheduled (raw text purged at 30 days; `media_url` cleared on
+      transcript) — Principle III.
+- [ ] **`app_config`** has `functions_base_url` + `cron_service_key`, else **no cron job runs** — §4.
+- [ ] **Coordinator functions** have JWT enforcement off — §5.
+- [ ] **`FRONTEND_ORIGIN`** set to the deployed SPA origin — §3.
+- [ ] **Jurisdiction profile accepted** and risk owned by founder/tenant — `docs/compliance.md`.

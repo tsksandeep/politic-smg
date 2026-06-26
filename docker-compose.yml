@@ -1,9 +1,10 @@
 # Fully self-hosted local stack — one `docker compose up`, no Supabase CLI.
 #
-# Brings up Postgres + Auth (GoTrue) + REST (PostgREST) + Realtime + Kong gateway + Edge Functions
-# (edge-runtime) + a one-shot migration runner, plus MailHog (email), the external-API mock, and
-# the Vite frontend. Image tags are pinned to the exact versions the Supabase CLI uses, so the
-# behaviour matches `supabase start`. The browser reaches everything via Kong at localhost:54321.
+# Brings up Postgres + Auth (GoTrue) + REST (PostgREST) + Realtime + Storage + Kong gateway + Edge
+# Functions (edge-runtime) + a one-shot migration runner, plus MailHog (email), the external-API/LLM
+# mock, and the Vite frontend. Image tags are pinned to the exact versions the Supabase CLI uses, so
+# the behaviour matches `supabase start`. The browser reaches everything via Kong at localhost:54321.
+# The media-worker (OCR/ASR) is included as an OPTIONAL, commented-out service near the bottom.
 #
 # Quickstart: cp .env.local.example .env.local  &&  docker compose up   (then open :5173)
 # Mail UI :8025 · API gateway :54321 · Postgres :54322 · mock :9100
@@ -66,8 +67,8 @@ services:
       # Email → MailHog (SMTP 1025).
       GOTRUE_SMTP_HOST: mailhog
       GOTRUE_SMTP_PORT: "1025"
-      GOTRUE_SMTP_ADMIN_EMAIL: admin@politic.test
-      GOTRUE_SMTP_SENDER_NAME: Politic War Room
+      GOTRUE_SMTP_ADMIN_EMAIL: admin@openpolitics.test
+      GOTRUE_SMTP_SENDER_NAME: OpenPolitics War Room
       GOTRUE_SMTP_MAX_FREQUENCY: "1s"
 
   rest:
@@ -112,6 +113,30 @@ services:
       MIX_ENV: prod
       ECTO_IPV6: "true"
 
+  storage:
+    image: public.ecr.aws/supabase/storage-api:v1.11.13
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      rest:
+        condition: service_started
+    environment:
+      ANON_KEY: *anon-key
+      SERVICE_KEY: *service-key
+      POSTGREST_URL: http://rest:3000
+      PGRST_JWT_SECRET: *jwt-secret
+      DATABASE_URL: postgresql://supabase_storage_admin:postgres@db:5432/postgres
+      FILE_SIZE_LIMIT: "52428800"
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: stub
+      REGION: stub
+      GLOBAL_S3_BUCKET: stub
+      ENABLE_IMAGE_TRANSFORMATION: "false"
+    volumes:
+      - storage-data:/var/lib/storage
+
   migrate:
     image: public.ecr.aws/supabase/postgres:15.8.1.085
     depends_on:
@@ -144,20 +169,22 @@ services:
       SUPABASE_DB_URL: postgresql://postgres:postgres@db:5432/postgres
       SUPABASE_INTERNAL_JWT_SECRET: *jwt-secret
       SUPABASE_INTERNAL_HOST_PORT: "54321"
+      # Node-facing coordinator endpoints verify their own tenant-scoped node token (verifyJWT=false).
+      # Pipeline (pg_cron, service-role bearer) and war-room (user JWT) functions keep verifyJWT=true.
       SUPABASE_INTERNAL_FUNCTIONS_CONFIG: >-
-        {"account-revoke":{"verifyJWT":false,"entrypointPath":"supabase/functions/account-revoke/index.ts"},
-        "accounts":{"verifyJWT":false,"entrypointPath":"supabase/functions/accounts/index.ts"},
-        "alert-detail":{"verifyJWT":false,"entrypointPath":"supabase/functions/alert-detail/index.ts"},
-        "alert-triage":{"verifyJWT":false,"entrypointPath":"supabase/functions/alert-triage/index.ts"},
-        "analyze-comments":{"verifyJWT":false,"entrypointPath":"supabase/functions/analyze-comments/index.ts"},
-        "backfill":{"verifyJWT":false,"entrypointPath":"supabase/functions/backfill/index.ts"},
-        "detect-narratives":{"verifyJWT":false,"entrypointPath":"supabase/functions/detect-narratives/index.ts"},
-        "detection-settings":{"verifyJWT":false,"entrypointPath":"supabase/functions/detection-settings/index.ts"},
-        "ig-webhook":{"verifyJWT":false,"entrypointPath":"supabase/functions/ig-webhook/index.ts"},
-        "ingest-youtube":{"verifyJWT":false,"entrypointPath":"supabase/functions/ingest-youtube/index.ts"},
-        "oauth-callback":{"verifyJWT":false,"entrypointPath":"supabase/functions/oauth-callback/index.ts"},
-        "oauth-start":{"verifyJWT":false,"entrypointPath":"supabase/functions/oauth-start/index.ts"},
-        "retention-purge":{"verifyJWT":false,"entrypointPath":"supabase/functions/retention-purge/index.ts"}}
+        {"node-register":{"verifyJWT":false,"entrypointPath":"supabase/functions/node-register/index.ts"},
+        "work-lease":{"verifyJWT":false,"entrypointPath":"supabase/functions/work-lease/index.ts"},
+        "submit":{"verifyJWT":false,"entrypointPath":"supabase/functions/submit/index.ts"},
+        "heartbeat":{"verifyJWT":false,"entrypointPath":"supabase/functions/heartbeat/index.ts"},
+        "enrich":{"verifyJWT":true,"entrypointPath":"supabase/functions/enrich/index.ts"},
+        "detect-narratives":{"verifyJWT":true,"entrypointPath":"supabase/functions/detect-narratives/index.ts"},
+        "coordination-detect":{"verifyJWT":true,"entrypointPath":"supabase/functions/coordination-detect/index.ts"},
+        "assign-work":{"verifyJWT":true,"entrypointPath":"supabase/functions/assign-work/index.ts"},
+        "reconcile":{"verifyJWT":true,"entrypointPath":"supabase/functions/reconcile/index.ts"},
+        "media-dispatch":{"verifyJWT":true,"entrypointPath":"supabase/functions/media-dispatch/index.ts"},
+        "retention-purge":{"verifyJWT":true,"entrypointPath":"supabase/functions/retention-purge/index.ts"},
+        "alert-triage":{"verifyJWT":true,"entrypointPath":"supabase/functions/alert-triage/index.ts"},
+        "detection-settings":{"verifyJWT":true,"entrypointPath":"supabase/functions/detection-settings/index.ts"}}
     volumes:
       # Mount only functions/ + shared/ (NOT deno.lock/deno.json): the edge-runtime's Deno is older
       # than the toolchain that wrote deno.lock (v5) and would fail to read it. No import map is
@@ -175,6 +202,7 @@ services:
       - auth
       - rest
       - realtime
+      - storage
       - functions
     ports:
       - "54321:8000"
@@ -217,64 +245,23 @@ services:
     volumes:
       - ./backend/supabase:/app:ro
 
-  # --- Self-hosted Nango: manages all cadre OAuth (token vault + auto-refresh). -------------------
-  # Local providers.yaml points OAuth at the mock (:9100), so onboarding runs offline; prod doesn't
-  # mount it → real Meta/Google URLs. (Auth-only: no Redis/Elasticsearch needed.)
-  nango-db:
-    image: postgres:16.0-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: nango
-      POSTGRES_PASSWORD: nango
-      POSTGRES_DB: nango
-    volumes:
-      - nango-data:/var/lib/postgresql/data
-
-  nango-server:
-    image: nangohq/nango-server:hosted
-    platform: linux/amd64
-    restart: unless-stopped
-    depends_on:
-      - nango-db
-    environment:
-      # Local-dev value (NOT a secret); prod generates its own. base64 of a 32-byte key.
-      NANGO_ENCRYPTION_KEY: "c2VsZi1ob3N0ZWQtbG9jYWwtbm90LXNlY3JldC0zMmI="
-      NANGO_DB_USER: nango
-      NANGO_DB_PASSWORD: nango
-      NANGO_DB_HOST: nango-db
-      NANGO_DB_NAME: nango
-      SERVER_PORT: "3003"
-      NANGO_SERVER_URL: http://localhost:3003
-      NANGO_PUBLIC_SERVER_URL: http://localhost:3003
-      FLAG_AUTH_ENABLED: "false"
-      NANGO_DASHBOARD_USERNAME: admin
-      NANGO_DASHBOARD_PASSWORD: admin
-      FLAG_SERVE_CONNECT_UI: "true"
-    volumes:
-      - ./backend/docker/nango/providers.yaml:/app/nango/packages/providers/providers.yaml:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports:
-      - "3003:3003" # API + OAuth callback (browser-reachable)
-      - "3009:3009" # Connect UI (browser-reachable)
-
-  # One-shot: read Nango's generated secret key, create the integrations, publish the key to the
-  # Supabase DB as a GUC so the Edge Functions can use it. Keeps `docker compose up` turnkey.
-  nango-init:
-    image: denoland/deno:2.4.5
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      nango-server:
-        condition: service_started
-    entrypoint: ["deno", "run", "--allow-net", "--allow-env", "/nango-init.ts"]
-    environment:
-      NANGO_HOST: http://nango-server:3003
-      NANGO_DB_URL: postgresql://nango:nango@nango-db:5432/nango
-      SUPABASE_ADMIN_DB_URL: postgresql://supabase_admin:postgres@db:5432/postgres
-    volumes:
-      - ./backend/docker/nango-init.ts:/nango-init.ts:ro
-    restart: on-failure
+  # --- Media worker (OCR/ASR): transcribe-then-discard. OPTIONAL — heavy runtime, off by default. ---
+  # Drains pgmq media_jobs, fetches CDN media, OCR/ASR → media_transcript, then DISCARDS raw bytes
+  # (Principle III). Uncomment to run OCR/ASR locally; the rest of the pipeline works without it
+  # (posts are still captured; only transcription is skipped).
+  # media-worker:
+  #   build:
+  #     context: ./backend/media-worker
+  #   restart: unless-stopped
+  #   depends_on:
+  #     migrate:
+  #       condition: service_completed_successfully
+  #   env_file:
+  #     - .env.local
+  #   environment:
+  #     SUPABASE_DB_URL: postgresql://postgres:postgres@db:5432/postgres
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
 
   web:
     build:
@@ -291,8 +278,6 @@ services:
     environment:
       VITE_SUPABASE_URL: "http://localhost:54321"
       VITE_SUPABASE_ANON_KEY: "${SUPABASE_LOCAL_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0}"
-      # Self-hosted Nango (browser-reachable): Connect UI + API. Prod → the deployed Nango URL.
-      VITE_NANGO_HOST: "http://localhost:3003"
       CHOKIDAR_USEPOLLING: "true"
     volumes:
       - ./frontend:/app
@@ -302,4 +287,4 @@ services:
 
 volumes:
   db-data:
-  nango-data:
+  storage-data:

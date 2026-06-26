@@ -1,254 +1,206 @@
-# Politic — SMG (Social Media Graph)
+# OpenPolitics — Opposition Narrative Intelligence
 
-> A consented, single-party **observability cockpit** for political cadre social media.
-> Cadres connect their public Instagram (Creator) and YouTube accounts via OAuth; the
-> party gets unified visibility into what its base is pushing, how it performs, and how
-> the public reacts — on the party's *own* content only.
+> A multi-tenant intelligence platform where each tenant — a political organisation — measures the
+> **public** narrative output of its **opposition's** cadre: what narratives they push, how those
+> narratives rise and decay, when pushes are coordinated, and who amplifies them.
 
-This is a **bespoke, single-tenant platform for one party**, not a multi-tenant SaaS.
-The moat is the curated party-context knowledge base and the relationship — not the code.
+Ingestion is public-data scraping distributed across each tenant's own volunteer node network — its
+"IT wing". The platform turns thousands of public opposition posts into a handful of labelled
+narratives worth a war-room's attention, each carrying a confidence **signal**, never asserted as
+fact.
 
----
-
-## 1. The idea (final, narrowed scope)
-
-The party's cadres voluntarily connect their party-related public social accounts
-(Instagram Creator/Business + YouTube) through **explicit OAuth consent**. From that
-consented data the platform runs three jobs on one shared pipeline:
-
-1. **Rapid response (the wedge)** — detect anti-party narratives and coordinated trolling
-   in the comment sections of *our own* cadres' posts in near-real-time, and surface them
-   fast enough to mobilize a counter-response.
-2. **Performance analytics** — best/worst content, posting frequency, reach & engagement,
-   **unique *engaged* audience** and cadre-overlap mapping.
-3. **Message discipline** — detect & flag off-message or rule-breaking posts *after*
-   publication (observability, not enforcement) against a curated party-context KB.
-
-All three are **three views over one consented dataset**, not three pipelines.
-
-### Why this shape
-- The 2026 TN result (a digital-first insurgent dethroning an incumbent) put every party's
-  digital machine under review. The demand is for **better digital war machines**; cadre
-  observability is one credible component. We ride that attention but pitch concrete
-  rapid-response value — not a "you lost because of this" narrative that won't survive
-  scrutiny.
-- Every feature that required open-platform scraping, opposition-account access, or
-  follower-identity data has been **cut or reframed** (see §4), because the platform APIs
-  in 2026 block them and India's DPDP regime makes them a liability.
+The targets are the opposition's **public** accounts; the only thing the platform ever touches is data
+that is visible to a logged-out member of the public. It never logs in, never uses anyone's
+credentials, and never measures a tenant's own accounts.
 
 ---
 
-## 2. In scope / out of scope
+## 1. The idea
 
-| ✅ In scope | ❌ Out of scope |
-|---|---|
-| Cadre posts on **consented** IG Creator + YT accounts | Personal IG accounts (Basic Display API dead, Dec 2024) |
-| Comments on **our own** cadres' posts | Scraping opposition-owned accounts / open-platform comment mining |
-| Sentiment / anti-party / coordinated-troll **patterns** | Building identifiable dossiers on citizens |
-| Unique **engaged** audience (deduped by username) | True cross-account **follower** deduplication (APIs never expose follower identities) |
-| Detect & **flag** off-message posts | **Blocking/preventing** posts (we don't control cadre accounts) |
-| Aggregate, anonymized comment analysis | Long-term identifiable comment retention |
+A war-room analyst watches a single live board that names the narratives the opposition's cadre is
+currently pushing across their public posts — the claim, the framing, the target, how much volume
+each carries, and whether it is rising or fading. Underneath, four things make that board possible:
 
----
+1. **Distributed public capture** — a network of Manifest-V3 browser-extension *nodes* on
+   volunteers' residential IPs lease small batches of work, fetch public opposition data through an
+   isolated logged-out guest session, and submit normalised captures to a coordinator. Nodes never
+   log in and never touch the operator's personal session.
+2. **Enrichment** — captions, reel transcripts, and public comments are embedded (pgvector, 768-dim)
+   and classified (Gemini 2.5 Flash / Flash-Lite via OpenRouter). Media is **transcribed then
+   discarded** — the derived text is kept, the raw bytes never are.
+3. **Analytics** — embeddings cluster into labelled **narratives** with lifecycle and decay curves;
+   an **inferred** coordination signal fuses synchronised timing, near-duplicate captions, reused
+   reel audio, and same-hashed-author co-pushing; **amplifier** accounts are ranked by how reliably
+   they convert a narrative into engagement velocity; and an **emerging-narrative early warning**
+   trips before a cluster peaks.
+4. **Isolation** — every row carries a `tenant_id` and is row-level-security isolated. Many competing
+   political organisations live on one shared-schema deployment and none can read, write, or even
+   enumerate another's data.
 
-## 3. Honest limits (state these to the party upfront)
+### The scaling law — "your IT-wing strength is your scale"
 
-- **Detect & flag = a scoreboard + early-warning system, not a control system.** We observe
-  posts after publication; we cannot stop a post we don't control.
-- **"Public vs opposition commenter" is probabilistic.** Coordinated opposition is designed
-  to look organic. Output is a confidence signal, never a verdict.
-- **"Unique audience" = unique engagers**, deduped by username (exact for the engaged
-  subset), plus an optional *estimated* dedup reach. Not follower counts.
-- **Platform dependency is real.** Google's YouTube quota-increase **audit** is the single
-  biggest external risk and must be validated *before* committing (no paid-quota path).
+Throughput is a function of node count, not our infrastructure bill:
 
----
+> throughput per tenant ≈ (active nodes) × (safe requests / node / day)
 
-## 4. Reframed / cut features
-
-| Original ask | Disposition | What we do instead |
-|---|---|---|
-| Non-unique followers per account | ⚠️ Reframed | Unique **engaged** audience by username; cadre-overlap redundancy map; modeled dedup *estimate* |
-| Pick up opposition-comment virality | ⚠️ Constrained | Only within **our own** posts' comment sections |
-| Differentiate public vs opp commenters | ⚠️ Probabilistic | Confidence-scored classification, clearly labeled as signal |
-| Rules on what not to push | ✅ Kept | LLM + policy classifier flags violations post-publication |
-| RAG search + central party vector DB | ✅ Kept | pgvector-backed semantic search over content + party-context KB |
+At ~100 safe guest-requests/node/day, ~30 nodes covers ~250 accounts at a 2-hour cadence; ~500 nodes
+covers a 10k-account target at ~5 hours. Roughly linear. Scale is the tenant's recruiting problem.
+When node capacity falls below target, **coverage degrades proportionally and visibly** — the board
+never silently under-reports.
 
 ---
 
-## 5. Key metrics
+## 2. Architecture
 
-- **Unique engaged audience** (deduped usernames across all connected cadre accounts)
-- **Cadre overlap map** — which cadres reach the same people vs distinct pockets
-- **Narrative velocity** — rate of anti-party theme growth in own comment sections
-- **On-message rate** — % of cadre posts aligned to current party narrative
-- **Response latency** — time from attack-narrative detection to counter-mobilization
+```text
+        VOLUNTEER NODE NETWORK (the tenant's "IT wing")
+        ┌──────────────────────────────────────────────┐
+        │  MV3 browser extension · residential IP ·      │
+        │  isolated LOGGED-OUT guest session             │   lease → capture → submit → heartbeat
+        │  (rate-capped + jittered, never logs in)       │ ───────────────────────────────────────┐
+        └──────────────────────────────────────────────┘                                          │
+                                                                                                   ▼
+   ┌───────────────────────────────────  SUPABASE (shared-schema, one region per jurisdiction) ───────────┐
+   │                                                                                                       │
+   │   COORDINATOR (Edge Functions, node token auth — verify_jwt = false)                                  │
+   │     node-register · work-lease · submit · heartbeat                                                   │
+   │        │ normalise capture · HMAC-hash comment authors at ingest · enqueue                            │
+   │        ▼                                                                                              │
+   │   pgmq queues:  enrich_jobs ──▶ media_jobs ──▶ reconcile_jobs            ┌─────────────────────────┐  │
+   │        │                            │                                    │   MEDIA-WORKER          │  │
+   │        │                            └───────── media_url ──────────────▶ │  (always-on container)  │  │
+   │        ▼                                                                  │  fetch CDN media →      │  │
+   │   PIPELINE (Edge Functions, invoked by pg_cron with the service role)    │  OCR/ASR → transcript   │  │
+   │     enrich · detect-narratives · coordination-detect · assign-work       │  → DISCARD raw bytes    │  │
+   │     reconcile · retention-purge                                          └─────────────────────────┘  │
+   │        │                                                                                              │
+   │        ▼                                                                                              │
+   │   POSTGRES + pgvector   (every tenant row: tenant_id + RLS, default deny)                             │
+   │     tracked_account · post · post_metric_sample · comment(author_hash) · media_transcript            │
+   │     narrative · narrative_observation · coordination_signal · account_narrative_participation · alert │
+   │        │                                                                                              │
+   │        ├── tenant-scoped views (security_invoker): narrative_board · coordination_board ·             │
+   │        │      amplifier_targets · alert_board · node_coverage                                         │
+   │        │                                                                                              │
+   │        └── Realtime (postgres_changes, RLS-filtered) ──▶ live war-room                                │
+   │                                                                                                       │
+   │   WAR-ROOM (React SPA, Supabase Auth + JWT tenant claim)                                              │
+   │     narrative board · narrative detail · coordination board · amplifiers · node coverage · alerts     │
+   │     alert-triage · detection-settings (Admin)                                                         │
+   └───────────────────────────────────────────────────────────────────────────────────────────────────────┘
 
----
-
-## 6. Architecture — single-tenant on Supabase
-
-One dedicated Supabase project per party (true single tenancy: isolated Postgres,
-storage bucket, auth pool, and secrets — no shared multi-tenant plane). The LLM layer is
-**external** (OpenRouter → Gemini 2.5 Flash), so the platform's only job is data,
-ingestion, and serving — which collapses cleanly onto a single Postgres.
-
-```
-                         ┌────────────────────────────────────────────────┐
-   Cadre OAuth consent   │              SUPABASE (single tenant)          │
-   (IG Creator / YT) ───▶│                                                │
-                         │  ┌── Onboarding Edge Fn ─┐                     │
-   IG comment webhooks ─▶│  │  OAuth via Nango      │                     │
-   YT polling (pg_cron) ▶│  └────────────┬──────────┘                     │
-                         │               ▼                                │
-                         │   pgmq queue ──▶ Ingest Edge Fns (micro-batch) │
-                         │   (fetch → normalize → enqueue)                │
-                         │               │                                │
-                         │               ├──────────────┐                 │
-                         │               ▼              ▼                 │
-                         │        OpenRouter API   Supabase Storage       │
-                         │     (Gemini 2.5 Flash)   (raw payloads/blobs)  │
-                         │               │                                │
-                         │               ▼                                │
-                         │   ┌─────────  POSTGRES  ──────────┐            │
-                         │   │ relational tables             │            │
-                         │   │ + pgvector (RAG / party KB)   │            │
-                         │   │ + time-series metrics         │            │
-                         │   └───────────────┬───────────────┘            │
-                         │                   │                            │
-                         │    Realtime (Postgres changes) ──▶ live alerts │
-                         │                   │                            │
-                         │   PostgREST / Edge Fn API ──▶ dashboard (SPA)  │
-                         │                   ▲                            │
-                         └───────────────────┼────────────────────────────┘
-                                             │
-                              Supabase Auth + RLS — internal party users only
-
-   ── escape hatch (add only if Edge Fn limits bite) ──────────────────────
-   one small Render background worker as the always-on ingestion orchestrator
+   External inference: OpenRouter → Gemini 2.5 Flash / Flash-Lite (classification + synthesis) ·
+   Gemini embedding model → pgvector (768-dim). Only derived text is ever sent; never a join key.
 ```
 
-### Component mapping
+### Component map
 
-| Need | Supabase capability | Notes |
+| Surface | Lives in | Responsibility |
 |---|---|---|
-| Relational data (cadres, accounts, posts, comments, metrics) | **Postgres** | The dedup/overlap/frequency analytics are native SQL (window functions) |
-| Vector search (content RAG + party-context KB) | **pgvector** | Same DB as analytics — hybrid SQL + vector, no separate store to sync |
-| Time-series metrics (engagement, narrative velocity) | **Postgres** (+ partitioning / optional TimescaleDB) | Partition by time; roll up to aggregates |
-| Internal auth | **Auth + RLS** | SSO/email for party users; row-level security enforces least privilege |
-| Realtime alerts (rapid-response wedge) | **Realtime** | Stream Postgres changes to the dashboard; no custom WS server |
-| Raw payloads, media thumbs, archived comment dumps | **Storage** | S3-compatible; system of record for raw ingest |
-| Ingestion pipeline decoupling | **pgmq** | Postgres-native queue: fetch → normalize → analyze → persist, with retries/DLQ |
-| Scheduled YT polling + token refresh | **pg_cron** | Triggers micro-batch Edge Functions; backoff to respect quota |
-| Compute (OAuth flows, ingest workers, API) | **Edge Functions** (Deno) | One function per bounded responsibility; webhooks land here |
-| Cadre OAuth + token storage/refresh | **Nango** (self-hosted, per-tenant) | Brokers IG/YT consent; stores + auto-refreshes per-cadre tokens; the app keeps only a connection handle |
-| Internal secrets (service-role key for cron) | **Vault** (+ Postgres) | Cadre OAuth *client* secrets live inside Nango, not the app |
-| LLM inference | **OpenRouter → Gemini 2.5 Flash** | External API; see §7 |
-
-### Scaling note (compute, not storage)
-Postgres comfortably handles low-thousands-of-accounts comment volume (partition the hot
-comment tables, keep raw dumps in Storage). The real ceiling is **Edge Function execution
-limits** for long ingestion runs — but YouTube's 10k-unit/day quota throttles polling anyway,
-so frequent **small** pg_cron micro-batches stay well inside the limits. Only if that proves
-insufficient do we add the **Render background worker** escape hatch (one always-on
-orchestrator that drains pgmq) — Supabase's one weak spot, Render's strongest.
+| **Coordinator** | `backend/supabase/functions/{node-register,work-lease,submit,heartbeat}` | Node lifecycle: enrolment, rate-capped redundant work leases, capture normalisation, liveness. Node-token auth (`verify_jwt = false`). |
+| **Pipeline** | `backend/supabase/functions/{enrich,detect-narratives,coordination-detect,assign-work,reconcile,retention-purge}` | Embed/classify/hash, cluster + label + lifecycle + early-warning, inferred coordination, velocity-aware assignment, reconciliation + node trust, retention purge. Invoked by `pg_cron`. |
+| **War-room API** | `backend/supabase/functions/{alert-triage,detection-settings}` + views | Alert triage and per-tenant thresholds, under the signed-in user's JWT + RLS. |
+| **Node client** | `extension/` | MV3 extension: isolated guest session, lease/submit/heartbeat. The only component that touches the target platform, and only logged-out. |
+| **Media worker** | `backend/media-worker/` | Always-on container: fetch CDN media → OCR/ASR → transcript → discard bytes. The one job Edge Functions cannot do. |
+| **War-room SPA** | `frontend/` | React board: narratives, coordination, amplifiers, node coverage, alerts. |
+| **Schema** | `backend/supabase/migrations/0001–0007` | Multi-tenant schema, pgvector, RLS, pgmq, pg_cron, views, detection. |
 
 ---
 
-## 7. AI / NLP layer — Gemini 2.5 Flash via OpenRouter
+## 3. The nine principles (in brief)
 
-All inference is an external API call through **OpenRouter**, which gives one key, one
-billing surface, model fallback, and a request log. Two-tier to control cost at volume
-(thousands of accounts × many posts/comments):
+The constitution (`.specify/memory/constitution.md`) governs every spec, plan, and task.
 
-- **Tier 1 — bulk, cheap:** **Gemini 2.5 Flash-Lite** for high-volume work — per-comment
-  sentiment, language detection, coarse spam/troll-pattern classification.
-- **Tier 2 — nuanced:** **Gemini 2.5 Flash** for on-message/off-message judgment against the
-  party-context KB, anti-party theme synthesis, and rapid-response narrative summaries.
-
-Route by difficulty; escalate only the ambiguous cases from Tier 1 to Tier 2 to keep cost
-down. OpenRouter handles provider fallback and a unified audit trail of every model call.
-
-**Embeddings & RAG:** OpenRouter is chat-completion-focused, so embeddings come from a
-**Gemini embedding model called directly** (Google AI / Vertex), written into **pgvector**.
-The party-context knowledge base (manifesto, current talking points, banned topics,
-historical positions) lives in that same Postgres; both semantic content search and the
-on-message classifier retrieve from it via hybrid SQL + vector queries.
+| # | Principle | In one line |
+|---|---|---|
+| I | **Multi-Tenant Isolation** *(non-negotiable)* | `tenant_id` + RLS on every row; cross-tenant access is impossible and tested as a property. |
+| II | **Public-Data-Only** *(non-negotiable)* | Logged-out guest session only; never log in, never defeat a private gate. The load-bearing legal bet. |
+| III | **Data Minimisation & No-Warehousing** *(non-negotiable)* | Comment authors HMAC-hashed at ingest; raw media transcribed-then-discarded; raw text on a retention TTL. |
+| IV | **Volunteer-Node Safety** | Isolated guest cookie jar; rate-capped + jittered; one-way egress; the node holds no tenant data beyond its lease. |
+| V | **Honest Signals** | Every probabilistic output is a labelled signal with confidence; coordination is **inferred**; human-in-the-loop before action. |
+| VI | **Adversarial Robustness** | Assume targets adapt — cross-validate across redundant nodes, randomise cadence, never trust one sensor. |
+| VII | **Data-Integrity & Anti-Poisoning** | 2–3 node redundancy + reconciliation + decaying trust score; a compromised node cannot silently poison metrics. |
+| VIII | **Jurisdiction-Aware Compliance** | Per-tenant jurisdiction profile drives retention/identity/residency; India/DPDP at launch; risk is founder/tenant-owned. |
+| IX | **Platform & Anti-Bot Resilience** | Degrade gracefully; surface coverage gaps; never fail closed silently. |
 
 ---
 
-## 8. Security & compliance (DPDP posture: minimize & anonymize)
+## 4. Repository layout
 
-- **Cadre data:** lawful basis = explicit OAuth consent. Per-cadre tokens are held and
-  auto-refreshed by **Nango** (self-hosted, India region), encrypted at rest; the app stores
-  only a connection handle, never a token (IG long-lived ~60-day lifecycle handled by Nango);
-  revocation fully honored (Nango connection deleted + data purged).
-- **Commenter data:** analyzed in **aggregate**; commenter usernames **hashed** internally;
-  troll detection works on *patterns* (hashed IDs, timing bursts, text similarity), not
-  identities. **Short retention with auto-deletion** (pg_cron purge jobs); raw comment text
-  not retained long-term.
-- **Access:** dashboards behind **Supabase Auth**; **row-level security (RLS)** enforces
-  least-privilege internal roles at the database layer.
-- **Auditability:** OpenRouter request log + a Postgres access/audit trail retain a record of
-  model calls and data access for accountability.
-- **Data residency:** pin the Supabase project to an India region to keep personal data
-  in-country.
-- This posture is also the public-trust line: *we do not build dossiers on citizens.*
-- Substantive DPDP provisions bite **May 2027** — retention/deletion and lawful-basis
-  documentation are designed in from day one, not bolted on.
+```text
+backend/
+├── supabase/
+│   ├── migrations/      # 0001 schema · 0002 vector · 0003 rls · 0004 queues · 0005 cron · 0006 views · 0007 detection
+│   ├── functions/       # coordinator + pipeline + war-room Edge Functions (Deno/TypeScript)
+│   ├── shared/          # db, llm, embeddings, hash, node-auth, tenant, labels, log
+│   ├── seed/            # demo_tenant.sql — two tenants, nodes, captured posts, a coordination burst
+│   └── tests/           # RLS isolation property, reconciliation/trust, detection, enrich, retention
+├── media-worker/        # always-on OCR/ASR container (transcribe-then-discard)
+└── docker/              # self-hosted local stack: kong.yml, migrate.sh, edge-main, db-init
 
----
-
-## 9. Risks & open dependencies
-
-1. **Google quota audit** — validate the YouTube Data API quota increase **before** build;
-   no paid-quota path, audits can reject data-heavy use cases.
-2. **Platform dependency** — Meta/Google can change quotas or deprecate endpoints; keep
-   contingency per platform.
-3. **Single-customer concentration** — consulting economics (build fee + retainer), revenue
-   tied to one party's election cycle; price accordingly.
-4. **Cadre-adoption framing** — must read as *help cadres get amplified*, not *police them*;
-   introduce accountability views last and carefully.
+extension/               # MV3 node client (TypeScript): guest session, lease/submit/heartbeat
+frontend/                # React war-room SPA + landing hero
+specs/001-opposition-intel/   # spec · plan · research · data-model · quickstart · tasks · contracts/
+.specify/memory/         # constitution.md (the nine principles — source of truth)
+docs/                    # compliance, deploy, local-dev, node-network, landing-page, secrets
+```
 
 ---
 
-## 10. Non-goals
+## 5. Getting started
 
-- Not a multi-tenant SaaS (single party, single Supabase project).
-- Not a content-blocking / pre-publish gate (observability only).
-- Not an opposition-surveillance tool (own posts only).
-- Not a citizen-profiling system (aggregate + anonymized).
+- **Local dev** — bring the whole stack up with one `docker compose up`, migrate, seed, run the
+  pipeline, and exercise a simulated node: [`docs/local-dev.md`](docs/local-dev.md). Mirrors
+  [`specs/001-opposition-intel/quickstart.md`](specs/001-opposition-intel/quickstart.md).
+- **Deploy** — provision Supabase per jurisdiction (India for launch), set secrets, apply migrations,
+  deploy functions, run the media worker, distribute the extension: [`docs/deploy.md`](docs/deploy.md).
+- **The node network** — install, safety model, rate caps, redundancy/trust, the scaling law:
+  [`docs/node-network.md`](docs/node-network.md).
+- **Compliance** — jurisdiction-aware posture, the India/DPDP profile, the public-data legal bet:
+  [`docs/compliance.md`](docs/compliance.md).
 
----
-
-## 11. Roadmap (wedge-first)
-
-- **Phase 0 — De-risk:** pass Google quota audit; sign one design-partner party; finalize
-  DPDP data-flow.
-- **Phase 1 — Rapid response (wedge):** consented onboarding + own-post comment ingestion +
-  anti-party narrative detection + live alerts. The demo that closes the contract.
-- **Phase 2 — Performance analytics:** unique engaged audience, cadre-overlap map, best/worst
-  content, frequency.
-- **Phase 3 — Message discipline:** party-context KB + on-message classifier + flagging.
-- **Phase 4 — Accountability views:** introduced last, with adoption-safe framing.
+This project is built with [GitHub Spec Kit](https://github.com/github/spec-kit): the constitution
+governs, then `spec → plan → research → data-model → tasks → implement`. No implementation begins
+before the Constitution Check passes.
 
 ---
 
-## 12. Development (Spec-Driven)
+## 6. Honest limits
 
-This project is built with [GitHub Spec Kit](https://github.com/github/spec-kit). Artifacts:
+State these plainly — they are constitutional, not caveats bolted on:
 
-- **Constitution:** `.specify/memory/constitution.md` (7 non-negotiable principles)
-- **Feature 001 — rapid-response wedge:** `specs/001-rapid-response/`
-  - `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, `tasks.md`
-- **Code:** `backend/supabase/` (migrations, Edge Functions, shared utils, tests) · `frontend/` (React board)
-- **Deploy & validate:** [`docs/deploy.md`](docs/deploy.md) — provision (India region), set secrets,
-  apply migrations, deploy functions, and validate (incl. a no-external-API demo seed at
-  `backend/supabase/seed/demo_burst.sql`)
-- **Release gates:** [`docs/quota-audit.md`](docs/quota-audit.md) (YouTube quota), `docs/compliance.md` (DPDP/residency, pending)
+- **Coordination is an inference, not proof.** Targets are adaptive and designed to look organic. The
+  output is a confidence signal naming the type (temporal / content / shared-audio / author-network)
+  and the contributing accounts — never a verdict. A human reviews before any action.
+- **Engagement counts are a proxy for reach.** Impressions are unobservable; likes/comments/views are
+  what is public, and they are labelled as a proxy.
+- **Coverage is bounded by node count and IP reputation.** A burned residential IP throttles to a
+  persistent 401; the platform backs off, re-leases to another node, and shows the gap. It does not
+  invent data to fill it. Below target node count, coverage degrades — visibly.
+- **Amplifier rank, patient-zero, lifecycle, half-life are estimates**, each carried with confidence.
+- **We build on rented land.** Platform anti-bot changes are expected; the design degrades gracefully
+  rather than pretending all is well.
 
-Status: Setup, Foundational, **US1 (the wedge MVP), US2 (consent onboarding via Nango), US3
-(triage), and Polish are all implemented and locally validated.** A favourable-narrative +
-cadre-coverage view (an early slice of Phase 2 analytics) ships alongside the wedge. The only
-open item is the external **YouTube Data API quota audit** (Principle VII); until it is approved
-the YouTube path stays code-gated (`YT_INGEST_ENABLED`) and the product runs **Instagram-first**.
+## 7. Legal posture
+
+The entire posture rests on **public, logged-out access** — the *Meta v. Bright Data* (N.D. Cal.
+2024) line that scraping public, unauthenticated data is not unauthorised access. The hard rule is
+**never log in** (Principle II): logging in would forfeit that protection and reframe the activity as
+unauthorised access under the IT Act. The platform also **never warehouses raw media** (sidestepping
+copyright-reproduction exposure) and **never persists raw commenter handles** by default (the highest
+item in the data-protection review).
+
+Residual risk is primarily **political** — an opposition complaint — and is explicitly
+**founder/tenant-owned, per jurisdiction**, recorded in [`docs/compliance.md`](docs/compliance.md).
+The launch jurisdiction is **India / DPDP**; the configuration generalises to stricter profiles
+(e.g. EU/GDPR) without code changes. **This is not legal advice.**
+
+---
+
+## Status
+
+**Foundation laid; all surfaces scaffolded.** The multi-tenant schema (migrations 0001–0007 — schema,
+pgvector, RLS, pgmq, pg_cron, views, detection) is in place, with the coordinator + pipeline Edge
+Functions, the MV3 node client, the media-worker container, and the React war-room scaffolded against
+it. Tenant isolation is enforced as a database property and exercised by cross-tenant negative tests.
+Launch jurisdiction is India / DPDP; the multi-jurisdiction config is built with one profile shipped.

@@ -1,33 +1,43 @@
-# Secrets & Credentials (T005)
+# Secrets & Credentials
 
-No secret lives in code or git. Secrets have three homes: most are **Edge Function secrets**
-(env); per-cadre OAuth tokens + platform OAuth *client* creds live in **Nango**; and the
-service-role key used by pg_cron lives in **Supabase Vault**. The frontend uses only the public
-anon key; the service-role key is backend-only.
+No secret lives in code or git. Secrets have two homes: most are **Edge Function secrets** (env), and
+the two values `pg_cron` needs to call functions live in the **`app_config`** table (service-role-only,
+no RLS policy → only the service role can read them). The frontend uses only the public anon key; the
+service-role key is backend-only. No raw commenter handle, node token, or session cookie is ever
+stored or logged.
 
 | Secret | Used by | Notes |
 |---|---|---|
-| `OPENROUTER_API_KEY` | `analyze-comments`, `detect-narratives` | Gemini 2.5 Flash / Flash-Lite via OpenRouter |
-| `VERTEX_EMBEDDINGS_URL` | `analyze-comments` | Vertex AI `gemini-embedding-001` `:predict` URL (asia-south1 for India residency) |
-| `VERTEX_SA_EMAIL`, `VERTEX_SA_PRIVATE_KEY` | `shared/embeddings.ts` | Service account to mint Vertex access tokens (prod) |
-| `NANGO_HOST`, `NANGO_SECRET_KEY` | `oauth-start`, `oauth-callback`, `backfill`, `ingest-youtube` | Self-hosted Nango — manages cadre OAuth + token storage/refresh |
-| `IG_APP_SECRET` | `ig-webhook` | Instagram comment webhook HMAC verification (separate from Nango) |
-| `IG_WEBHOOK_VERIFY_TOKEN` | `ig-webhook` | Webhook subscription verification |
-| `COMMENTER_HASH_KEY` | `shared/hash.ts` | Keyed hash for commenter anonymization (Principle III) |
-| `SUPABASE_SERVICE_ROLE_KEY` | Edge Functions | Backend only; never exposed to the client |
-| `app.functions_base_url`, `service_role_key` (Vault) | `invoke_edge_function` (pg_cron) | Supabase Cron → Edge Function invocation (see deploy.md) |
+| `COMMENTER_HASH_KEY` | `shared/hash.ts` (at ingest, in `submit`/`enrich`) | Keyed HMAC for comment-author hashing (Principle III). Rotating it breaks historical hash continuity by design. |
+| `NODE_TOKEN_KEY` | `shared/node-auth.ts` (`node-register` / `work-lease` / `submit` / `heartbeat`) | Keyed HMAC used to derive/verify `node.token_hash`. Raw node tokens are shown once at register and never stored. |
+| `NODE_ENROLMENT_SECRET` | `node-register` | Signs/validates tenant enrolment codes a node redeems on first run. |
+| `OPENROUTER_API_KEY` | `enrich`, `detect-narratives`, `coordination-detect` | Gemini 2.5 Flash / Flash-Lite via OpenRouter (classification + synthesis). |
+| `EMBEDDINGS_PROVIDER` + `VERTEX_EMBEDDINGS_URL` | `shared/embeddings.ts` | 768-dim embeddings; for `IN-DPDP` prefer an India-region (`asia-south1`) Vertex `:predict` URL. |
+| `VERTEX_SA_EMAIL`, `VERTEX_SA_PRIVATE_KEY` | `shared/embeddings.ts` | Service account to mint Vertex access tokens (cloud). |
+| `FRONTEND_ORIGIN` | all war-room-facing functions | CORS allow-origin for SPA→function calls. **Required in production.** |
+| `SUPABASE_SERVICE_ROLE_KEY` | Edge Functions | Backend only; bypasses RLS; never exposed to the client. |
+| `functions_base_url`, `cron_service_key` (in `app_config`) | `invoke_function()` (pg_cron) | Base URL + service-role bearer so scheduled jobs can call Edge Functions (see `0005_cron.sql`, `docs/deploy.md` §4). |
 
-> Platform OAuth **client** credentials (Instagram via Facebook Login, YouTube via Google) are no
-> longer Edge Function secrets — they are configured **inside Nango** per integration. The app only
-> needs `NANGO_HOST` + `NANGO_SECRET_KEY`. Nango stores and auto-refreshes per-cadre tokens, so there
-> is no per-cadre token vault or token-refresh job in the app anymore.
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are injected into Edge Functions
+by the platform automatically — they are not set by hand.
 
 ## Setup
-1. Create the Supabase project in an **India region** (Principle III).
-2. Stand up **Nango** (self-hosted, India region): register the `instagram` + `youtube` integrations
-   with the real Facebook/Google client id+secret, then copy the environment **Secret Key**.
-3. Set Edge Function secrets: `supabase secrets set OPENROUTER_API_KEY=... VERTEX_EMBEDDINGS_URL=...
-   VERTEX_SA_EMAIL=... VERTEX_SA_PRIVATE_KEY=... NANGO_HOST=... NANGO_SECRET_KEY=... IG_APP_SECRET=...`
-4. Store `COMMENTER_HASH_KEY` as a strong random value; rotating it re-anonymizes (breaks
-   historical hash continuity by design).
-5. Copy `frontend/.env.example` → `frontend/.env` with the project URL + anon key + `VITE_NANGO_HOST`.
+1. Create the Supabase project in the **region matching the tenant jurisdiction** (India for the
+   launch `IN-DPDP` profile — Principle VIII).
+2. Set the function secrets (strong random for the three keyed secrets):
+   ```bash
+   supabase secrets set \
+     COMMENTER_HASH_KEY="$(openssl rand -hex 32)" \
+     NODE_TOKEN_KEY="$(openssl rand -hex 32)" \
+     NODE_ENROLMENT_SECRET="$(openssl rand -hex 32)" \
+     OPENROUTER_API_KEY=... EMBEDDINGS_PROVIDER=vertex VERTEX_EMBEDDINGS_URL=... \
+     VERTEX_SA_EMAIL=... VERTEX_SA_PRIVATE_KEY="..." \
+     FRONTEND_ORIGIN="https://<deployed-frontend-origin>"
+   ```
+3. Set the two `app_config` rows so `pg_cron` can invoke functions (see `docs/deploy.md` §4):
+   `functions_base_url` and `cron_service_key`.
+4. Copy `frontend/.env.example` → `frontend/.env` with the project URL + anon key (anon key only —
+   never the service-role key).
+
+> Node tokens are tenant-scoped and revocable: an Admin can revoke a node (`node.status = revoked`)
+> and it stops being leased work immediately. Enrolment codes are single-tenant and expire.

@@ -1,14 +1,14 @@
-# Supabase config — Politic-SMG (single tenant per party).
-# Drives both local dev (`supabase start`) and the linked hosted project.
-# NOTE: the HOSTED project region MUST be an India region (e.g. ap-south-1 / Mumbai) to
-# satisfy constitution Principle III (data residency) — set at project creation.
+# Supabase config — OpenPolitics, Opposition Narrative Intelligence Platform.
+# Shared-schema multi-tenant: one Supabase project holds all tenants, isolated by tenant_id + RLS.
+# The HOSTED project region is set per the tenant jurisdiction profile; the launch IN-DPDP profile
+# pins an India region (e.g. ap-south-1 / Mumbai) to keep personal data in-country (Principle VIII).
 
-project_id = "politic-smg"
+project_id = "openpolitics"
 
 [api]
 enabled = true
 port = 54321
-# We use pgmq only inside SQL (not over the API), so pgmq_public is not exposed here.
+# pgmq is used only inside SQL (not over the API), so pgmq_public is not exposed here.
 schemas = ["public", "graphql_public"]
 extra_search_path = ["public", "extensions"]
 max_rows = 1000
@@ -28,7 +28,6 @@ enabled = true
 enabled = true
 port = 54323
 
-# Local mailbox (captures auth emails so you can grab confirmation links in dev).
 [inbucket]
 enabled = true
 port = 54324
@@ -38,45 +37,40 @@ enabled = true
 
 [auth]
 enabled = true
-# Match the local frontend dev origin so redirects/JWT audience line up.
 site_url = "http://localhost:5173"
 additional_redirect_urls = ["http://localhost:5173"]
 jwt_expiry = 3600
-# Internal party users only (Admin / Analyst) — an Admin provisions users.
+# Tenant staff only (Admin / Analyst), provisioned by a tenant Admin. No open signup.
 enable_signup = false
 
 [auth.email]
-# The email provider MUST be enabled — magic-link (OTP) is the only sign-in method. Invite-only
-# is still enforced by [auth].enable_signup = false above: provisioned users get a login link;
-# unknown emails are rejected (the SPA also passes shouldCreateUser: false).
 enable_signup = true
 enable_confirmations = false
 
 [edge_runtime]
 enabled = true
-# "oneshot" gives fast hot-reload for `supabase functions serve` in local dev.
 policy = "oneshot"
 inspector_port = 8083
 
 # --- Per-function auth ---
-# Public, unauthenticated endpoints: called by external platforms with no Supabase JWT, so the
-# gateway's JWT check MUST be disabled. They do their own verification instead.
-# ig-webhook    : Meta calls it; authenticity is enforced by the x-hub-signature-256 HMAC check.
-# oauth-callback: the SPA POSTs it after the Nango Connect flow with the issued `connection_id`;
-#                 the account is resolved from Nango (a usable connection is the proof of consent).
-[functions.ig-webhook]
+# Node-facing coordinator endpoints: nodes have NO Supabase JWT — they authenticate with a
+# tenant-scoped node token that the function verifies itself (HMAC vs node.token_hash). The gateway
+# JWT check MUST be disabled for these.
+[functions.node-register]
+verify_jwt = false
+[functions.work-lease]
+verify_jwt = false
+[functions.submit]
+verify_jwt = false
+[functions.heartbeat]
 verify_jwt = false
 
-[functions.oauth-callback]
-verify_jwt = false
-
-# All other functions keep verify_jwt = true (the default):
-#  - oauth-start / accounts / account-revoke / alert-detail / alert-triage / detection-settings
-#    are called by the SPA with the signed-in user's JWT (RLS applies).
-#  - analyze-comments / detect-narratives / ingest-youtube / retention-purge are
-#    invoked by pg_cron with the service-role key as the bearer (see 0010_cron_auth.sql).
-#    (No token-refresh job — Nango auto-refreshes cadre tokens; see migration 0016.)
-
-# pg_cron / pgmq / pg_net / vector / vault are enabled via migrations and ship with the
-# local Postgres image; no extra config needed here. (Vault holds only the cron service-role key;
-# cadre OAuth tokens live in Nango.)
+# All other functions keep verify_jwt = true (default):
+#   - alert-triage / detection-settings : called by the war-room SPA with the signed-in user's JWT
+#     (RLS + current_tenant() apply).
+#   - enrich / detect-narratives / coordination-detect / assign-work / reconcile / media-dispatch /
+#     retention-purge : invoked by pg_cron with the service-role key as the bearer (see 0005_cron.sql).
+#
+# pg_cron / pgmq / pg_net / vector / vault ship with the local Postgres image and are enabled via
+# migrations; no extra config here. Vault/function-secrets hold the commenter-hash key and the cron
+# service-role key. No raw commenter handle, credential, or session cookie is ever stored or logged.

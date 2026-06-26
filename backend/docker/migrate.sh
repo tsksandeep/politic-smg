@@ -29,13 +29,23 @@ for f in $(ls /migrations/*.sql | sort); do
   psql "$DB" -v ON_ERROR_STOP=1 -c "insert into _app_migrations (filename) values ('$base');"
 done
 
-# Seed only a fresh DB (no cadres yet), and only when SEED=true.
-if [ "${SEED:-false}" = "true" ] && [ -f /seed/board_demo.sql ]; then
-  if [ "$(psql "$DB" -tAc "select count(*) from cadre")" = "0" ]; then
-    echo "[migrate] seeding demo board…"
-    psql "$DB" -v ON_ERROR_STOP=1 -f /seed/board_demo.sql || echo "[migrate] seed failed (non-fatal)"
+# Local cron wiring: 0005_cron.sql's invoke_function() reads functions_base_url + cron_service_key
+# from app_config, so the SCHEDULED pipeline drives itself locally (same code as prod, only the base
+# URL differs — here the in-network Kong functions route; in prod the project functions URL).
+LOCAL_SERVICE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
+psql "$DB" -v ON_ERROR_STOP=1 -c \
+  "insert into app_config(key, value) values
+     ('functions_base_url', 'http://kong:8000/functions/v1'),
+     ('cron_service_key',   '$LOCAL_SERVICE_KEY')
+   on conflict (key) do update set value = excluded.value;"
+
+# Seed only a fresh DB (no tenants yet), and only when SEED=true.
+if [ "${SEED:-false}" = "true" ] && [ -f /seed/demo_tenant.sql ]; then
+  if [ "$(psql "$DB" -tAc "select count(*) from tenant")" = "0" ]; then
+    echo "[migrate] seeding demo tenants…"
+    psql "$DB" -v ON_ERROR_STOP=1 -f /seed/demo_tenant.sql || echo "[migrate] seed failed (non-fatal)"
   else
-    echo "[migrate] cadres already present — skipping seed."
+    echo "[migrate] tenants already present — skipping seed."
   fi
 fi
 

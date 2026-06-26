@@ -1,5 +1,6 @@
-// detailKit — shared bits for the detail pages (NarrativeDetail, CadreDetail): the section
-// label, a big metric, and the anonymized comment list (sentiment-coloured, never an identity).
+// detailKit — shared bits for the detail pages (NarrativeDetail, AlertDetail, Coverage): the
+// section label, a big metric, and an anonymized comment list (sentiment-coloured, never an
+// identity — only an HMAC author hash exists, raw commenter handles are never stored, FR-007).
 
 import { CLASH, color, MONO, sentimentColor } from "../theme";
 

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenPolitics Node — Setup</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        max-width: 640px; margin: 2rem auto; padding: 0 1rem;
+      }
+      h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+      .sub { color: #666; margin-top: 0; }
+      fieldset { border: 1px solid #ccc; border-radius: 8px; margin: 1rem 0; padding: 1rem; }
+      legend { font-weight: 600; padding: 0 0.4rem; }
+      label { display: block; font-weight: 600; margin: 0.75rem 0 0.25rem; }
+      input { width: 100%; box-sizing: border-box; padding: 0.5rem; border-radius: 6px;
+        border: 1px solid #aaa; font-size: 1rem; }
+      button { margin-top: 1rem; padding: 0.6rem 1.1rem; border: 0; border-radius: 6px;
+        background: #1a5; color: #fff; font-weight: 600; cursor: pointer; }
+      button.secondary { background: #357; }
+      .safety { background: #eaf7ee; border: 1px solid #9d9; border-radius: 8px;
+        padding: 0.9rem 1rem; }
+      .safety strong { display: block; margin-bottom: 0.3rem; }
+      .safety ul { margin: 0.4rem 0 0; padding-left: 1.2rem; }
+      .status { font-family: ui-monospace, monospace; background: #f4f4f4; color: #111;
+        padding: 0.8rem; border-radius: 6px; white-space: pre-wrap; }
+      .pill { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px;
+        font-size: 0.8rem; font-weight: 700; }
+      .ok { background: #cfc; color: #161; } .warn { background: #fda; color: #730; }
+      .bad { background: #fbb; color: #800; }
+      .msg { margin-top: 0.6rem; font-weight: 600; }
+      @media (prefers-color-scheme: dark) {
+        .sub { color: #aaa; } .safety { background: #13301c; border-color: #275; }
+        .status { background: #1b1b1b; color: #ddd; }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>OpenPolitics Node</h1>
+    <p class="sub">Volunteer IT-wing capture node — public, logged-out data only.</p>
+
+    <div class="safety">
+      <strong>This never touches your Instagram login.</strong>
+      Capture runs in a separate, throwaway <em>incognito guest session</em> with its own cookie
+      jar. The node:
+      <ul>
+        <li>never logs in and never reads or uses your Instagram account or cookies;</li>
+        <li>only reads <em>public</em>, logged-out data, at a capped + jittered rate;</li>
+        <li>sends data <em>one way</em> to your organisation's coordinator — nothing else.</li>
+      </ul>
+      If a capture IP gets rate-limited, only an anonymous guest session is involved — never you.
+    </div>
+
+    <fieldset>
+      <legend>Enrolment</legend>
+      <label for="coordinatorUrl">Coordinator URL</label>
+      <input id="coordinatorUrl" placeholder="https://coordinator.your-tenant.example.com" />
+
+      <label for="enrolmentCode">Enrolment code (from your admin)</label>
+      <input id="enrolmentCode" placeholder="e.g. OP-XXXX-XXXX" />
+
+      <label for="label">Node label</label>
+      <input id="label" placeholder="e.g. ravi-home-laptop" />
+
+      <button id="enrol">Enrol this node</button>
+      <p class="msg" id="msg"></p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Status</legend>
+      <p>
+        Node: <span id="nodeStatus" class="pill">unknown</span>
+        IP: <span id="ipStatus" class="pill">unknown</span>
+      </p>
+      <p>Captures submitted: <strong id="captures">0</strong></p>
+      <div class="status" id="statusDump">not enrolled yet</div>
+      <button class="secondary" id="runNow">Run a cycle now</button>
+      <button class="secondary" id="refresh">Refresh status</button>
+    </fieldset>
+
+    <script src="options.js" type="module"></script>
+  </body>
+</html>
