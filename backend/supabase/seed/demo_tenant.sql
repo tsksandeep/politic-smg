@@ -78,6 +78,11 @@ begin
        'analyst@saffron.test', crypt('demo-pass', gen_salt('bf')), now(), now(), now(),
        '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb)
     on conflict (id) do nothing;
+    -- GoTrue scans these token columns as non-null strings; a NULL yields a 500
+    -- "Database error finding user" at sign-in. Initialise them to '' (the API sets these itself).
+    update auth.users set confirmation_token = '', recovery_token = '',
+                          email_change_token_new = '', email_change = ''
+     where id in (admin_a, analyst_a, admin_b, analyst_b);
   exception when others then
     raise notice 'auth.users seed skipped (%) — provision war-room users via the API instead.', sqlerrm;
   end;

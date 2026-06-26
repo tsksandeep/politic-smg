@@ -39,7 +39,10 @@ export default function Landing() {
         email: email.trim(),
         // Invite-only: never create a user from the public page; only provisioned party
         // users receive a login link (unknown emails are silently rejected server-side).
-        options: { emailRedirectTo: `${window.location.origin}/narratives`, shouldCreateUser: false },
+        options: {
+          emailRedirectTo: `${window.location.origin}/narratives`,
+          shouldCreateUser: false,
+        },
       });
       setStatus(error ? "error" : "sent");
     } catch {
@@ -332,7 +335,7 @@ export default function Landing() {
           style={{
             position: "absolute",
             left: 64,
-            top: 120,
+            top: 100,
             zIndex: 10,
             maxWidth: 540,
             width: "calc(100% - 128px)",
@@ -351,8 +354,10 @@ export default function Landing() {
               textShadow: "0 2px 40px rgba(0,0,0,0.55)",
             }}
           >
-            <span style={{ color: EMBER }}>Opposition</span> narrative intelligence — what they push,
-            how it moves, who amplifies it.
+            Track <span style={{ color: EMBER }}>opposition </span> narrative effectively.{" "}
+            <span style={{ color: EMBER }}> What</span> they push? <br />{" "}
+            <span style={{ color: EMBER }}> How</span> it moves? <br />
+            <span style={{ color: EMBER }}> Who</span> amplifies it?
           </h1>
         </div>
 
